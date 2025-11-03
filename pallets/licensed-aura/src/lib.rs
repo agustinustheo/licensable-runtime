@@ -43,7 +43,8 @@ extern crate alloc;
 use alloc::vec::Vec;
 use codec::{Decode, Encode, MaxEncodedLen};
 use frame_support::{
-	traits::{DisabledValidators, FindAuthor, Get, OnTimestampSet, OneSessionHandler},
+	dispatch::{DispatchResult},
+	traits::{ConstU32, DisabledValidators, FindAuthor, Get, OnTimestampSet, OneSessionHandler},
 	BoundedSlice, BoundedVec, ConsensusEngineId, Parameter,
 };
 use log;
@@ -51,6 +52,7 @@ use sp_consensus_aura::{AuthorityIndex, ConsensusLog, Slot, AURA_ENGINE_ID};
 use sp_runtime::{
 	generic::DigestItem,
 	traits::{IsMember, Member, SaturatedConversion, Saturating, Zero},
+	transaction_validity::{InvalidTransaction, TransactionSource, TransactionValidity, ValidTransaction},
 	RuntimeAppPublic,
 };
 
@@ -84,6 +86,9 @@ pub mod pallet {
 
 	#[pallet::config]
 	pub trait Config: pallet_timestamp::Config + frame_system::Config {
+		/// The overarching event type.
+		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
+
 		/// The identifier type for an authority.
 		type AuthorityId: Member
 			+ Parameter
@@ -125,7 +130,52 @@ pub mod pallet {
 
 	#[pallet::hooks]
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
-		fn on_initialize(_: BlockNumberFor<T>) -> Weight {
+		fn on_initialize(n: BlockNumberFor<T>) -> Weight {
+			// Check if block production is halted
+			if HaltProduction::<T>::get() {
+				// Optional: Auto-recovery after 100 blocks (this can be made configurable)
+				if let Some(halted_at) = HaltedAtBlock::<T>::get() {
+					let blocks_halted = n.saturating_sub(halted_at);
+					// Auto-resume after 100 blocks
+					if blocks_halted > 100u32.into() {
+						HaltProduction::<T>::put(false);
+						HaltedAtBlock::<T>::kill();
+						HaltReason::<T>::kill();
+						log::info!(
+							target: LOG_TARGET,
+							"Auto-resuming block production after {:?} blocks",
+							blocks_halted
+						);
+					} else {
+						// Panic to invalidate the block
+						if let Some(reason_bytes) = HaltReason::<T>::get() {
+							if let Ok(reason_str) = core::str::from_utf8(&reason_bytes) {
+								panic!(
+									"Block production halted at block {:?}. Reason: {}",
+									halted_at,
+									reason_str
+								);
+							} else {
+								panic!(
+									"Block production halted at block {:?}. Reason: Invalid UTF-8",
+									halted_at
+								);
+							}
+						} else {
+							panic!(
+								"Block production halted at block {:?}. Reason: No reason provided",
+								halted_at
+							);
+						}
+					}
+				} else {
+					// First time halting, record the block number
+					HaltedAtBlock::<T>::put(n);
+					panic!("Block production halted at block {:?}", n);
+				}
+			}
+
+			// Original AURA logic continues here...
 			if let Some(new_slot) = Self::current_slot_from_digests() {
 				let current_slot = CurrentSlot::<T>::get();
 
@@ -150,9 +200,9 @@ pub mod pallet {
 				// TODO [#3398] Generate offence report for all authorities that skipped their
 				// slots.
 
-				T::DbWeight::get().reads_writes(2, 1)
+				T::DbWeight::get().reads_writes(3, 2) // Updated: Added reads for HaltProduction check
 			} else {
-				T::DbWeight::get().reads(1)
+				T::DbWeight::get().reads(2) // Updated: Added read for HaltProduction check
 			}
 		}
 
@@ -173,6 +223,80 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type CurrentSlot<T: Config> = StorageValue<_, Slot, ValueQuery>;
 
+	/// Flag to halt block production.
+	#[pallet::storage]
+	pub type HaltProduction<T: Config> = StorageValue<_, bool, ValueQuery>;
+
+	/// Block number when halt was triggered (for auto-recovery).
+	#[pallet::storage]
+	pub type HaltedAtBlock<T: Config> = StorageValue<_, BlockNumberFor<T>, OptionQuery>;
+
+	/// Optional: Store the reason for halting.
+	#[pallet::storage]
+	pub type HaltReason<T: Config> = StorageValue<_, BoundedVec<u8, ConstU32<256>>, OptionQuery>;
+
+	/// Events for the pallet.
+	#[pallet::event]
+	#[pallet::generate_deposit(pub(super) fn deposit_event)]
+	pub enum Event<T: Config> {
+		/// Block production was halted.
+		ProductionHalted { block_number: BlockNumberFor<T> },
+		/// Block production was resumed.
+		ProductionResumed { block_number: BlockNumberFor<T> },
+	}
+
+	/// Errors for the pallet.
+	#[pallet::error]
+	pub enum Error<T> {
+		/// Halt reason is too long.
+		ReasonTooLong,
+	}
+
+	#[pallet::call]
+	impl<T: Config> Pallet<T> {
+		/// Halt block production (requires sudo or governance).
+		#[pallet::call_index(0)]
+		#[pallet::weight(T::DbWeight::get().writes(3))]
+		pub fn sudo_halt_production(
+			origin: OriginFor<T>,
+			reason: Option<Vec<u8>>,
+		) -> DispatchResult {
+			ensure_root(origin)?;
+
+			let current_block = frame_system::Pallet::<T>::block_number();
+			Self::halt_production(reason)?;
+			Self::deposit_event(Event::ProductionHalted { block_number: current_block });
+			Ok(())
+		}
+
+		/// Resume block production (requires sudo or governance).
+		#[pallet::call_index(1)]
+		#[pallet::weight(T::DbWeight::get().writes(3))]
+		pub fn sudo_resume_production(origin: OriginFor<T>) -> DispatchResult {
+			ensure_root(origin)?;
+
+			let current_block = frame_system::Pallet::<T>::block_number();
+			Self::resume_production();
+			Self::deposit_event(Event::ProductionResumed { block_number: current_block });
+			Ok(())
+		}
+
+		/// Halt production via unsigned transaction (for offchain worker integration).
+		#[pallet::call_index(2)]
+		#[pallet::weight(T::DbWeight::get().writes(3))]
+		pub fn unsigned_halt_production(
+			origin: OriginFor<T>,
+			reason: Option<Vec<u8>>,
+		) -> DispatchResult {
+			ensure_none(origin)?;
+
+			let current_block = frame_system::Pallet::<T>::block_number();
+			Self::halt_production(reason)?;
+			Self::deposit_event(Event::ProductionHalted { block_number: current_block });
+			Ok(())
+		}
+	}
+
 	#[pallet::genesis_config]
 	#[derive(frame_support::DefaultNoBound)]
 	pub struct GenesisConfig<T: Config> {
@@ -185,9 +309,56 @@ pub mod pallet {
 			Pallet::<T>::initialize_authorities(&self.authorities);
 		}
 	}
+
+	#[pallet::validate_unsigned]
+	impl<T: Config> ValidateUnsigned for Pallet<T> {
+		type Call = Call<T>;
+
+		fn validate_unsigned(_source: TransactionSource, call: &Self::Call) -> TransactionValidity {
+			match call {
+				Call::unsigned_halt_production { reason: _ } => {
+					// Only allow one halt transaction per block
+					ValidTransaction::with_tag_prefix("AuraHalt")
+						.priority(u64::MAX) // High priority
+						.and_provides("halt_production")
+						.longevity(1) // Valid for 1 block
+						.propagate(true)
+						.build()
+				},
+				_ => InvalidTransaction::Call.into(),
+			}
+		}
+	}
 }
 
 impl<T: Config> Pallet<T> {
+	/// Halt block production.
+	pub fn halt_production(reason: Option<Vec<u8>>) -> DispatchResult {
+		HaltProduction::<T>::put(true);
+
+		if let Some(r) = reason {
+			let bounded_reason = BoundedVec::<u8, ConstU32<256>>::try_from(r)
+				.map_err(|_| Error::<T>::ReasonTooLong)?;
+			HaltReason::<T>::put(bounded_reason);
+		}
+
+		log::warn!(target: LOG_TARGET, "Block production halted!");
+		Ok(())
+	}
+
+	/// Resume block production.
+	pub fn resume_production() {
+		HaltProduction::<T>::put(false);
+		HaltedAtBlock::<T>::kill();
+		HaltReason::<T>::kill();
+		log::info!(target: LOG_TARGET, "Block production resumed!");
+	}
+
+	/// Check if production is halted.
+	pub fn is_halted() -> bool {
+		HaltProduction::<T>::get()
+	}
+
 	/// Change authorities.
 	///
 	/// The storage will be applied immediately.
