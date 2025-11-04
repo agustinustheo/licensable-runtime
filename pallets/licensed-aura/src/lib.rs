@@ -264,7 +264,7 @@ pub mod pallet {
 			ensure_root(origin)?;
 
 			let current_block = frame_system::Pallet::<T>::block_number();
-			Self::halt_production(reason)?;
+			Self::halt_production_internal(reason)?;
 			Self::deposit_event(Event::ProductionHalted { block_number: current_block });
 			Ok(())
 		}
@@ -276,22 +276,24 @@ pub mod pallet {
 			ensure_root(origin)?;
 
 			let current_block = frame_system::Pallet::<T>::block_number();
-			Self::resume_production();
+			Self::resume_production_internal();
 			Self::deposit_event(Event::ProductionResumed { block_number: current_block });
 			Ok(())
 		}
 
-		/// Halt production via unsigned transaction (for offchain worker integration).
+		/// Halt production from offchain worker (unsigned transaction).
+		/// This is specifically for the offchain worker pallet to call when license check fails.
 		#[pallet::call_index(2)]
 		#[pallet::weight(T::DbWeight::get().writes(3))]
-		pub fn unsigned_halt_production(
+		pub fn offchain_worker_halt_production(
 			origin: OriginFor<T>,
 			reason: Option<Vec<u8>>,
 		) -> DispatchResult {
+			// This accepts unsigned transactions from the offchain worker
 			ensure_none(origin)?;
 
 			let current_block = frame_system::Pallet::<T>::block_number();
-			Self::halt_production(reason)?;
+			Self::halt_production_internal(reason)?;
 			Self::deposit_event(Event::ProductionHalted { block_number: current_block });
 			Ok(())
 		}
@@ -316,7 +318,7 @@ pub mod pallet {
 
 		fn validate_unsigned(_source: TransactionSource, call: &Self::Call) -> TransactionValidity {
 			match call {
-				Call::unsigned_halt_production { reason: _ } => {
+				Call::offchain_worker_halt_production { reason: _ } => {
 					// Only allow one halt transaction per block
 					ValidTransaction::with_tag_prefix("AuraHalt")
 						.priority(u64::MAX) // High priority
@@ -332,8 +334,9 @@ pub mod pallet {
 }
 
 impl<T: Config> Pallet<T> {
-	/// Halt block production.
-	pub fn halt_production(reason: Option<Vec<u8>>) -> DispatchResult {
+	/// Internal function to halt block production.
+	/// Can only be called through sudo or offchain worker extrinsics.
+	fn halt_production_internal(reason: Option<Vec<u8>>) -> DispatchResult {
 		HaltProduction::<T>::put(true);
 
 		if let Some(r) = reason {
@@ -346,15 +349,16 @@ impl<T: Config> Pallet<T> {
 		Ok(())
 	}
 
-	/// Resume block production.
-	pub fn resume_production() {
+	/// Internal function to resume block production.
+	/// Can only be called through sudo extrinsic.
+	fn resume_production_internal() {
 		HaltProduction::<T>::put(false);
 		HaltedAtBlock::<T>::kill();
 		HaltReason::<T>::kill();
 		log::info!(target: LOG_TARGET, "Block production resumed!");
 	}
 
-	/// Check if production is halted.
+	/// Check if production is halted (read-only).
 	pub fn is_halted() -> bool {
 		HaltProduction::<T>::get()
 	}
