@@ -5,13 +5,16 @@ include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 
 extern crate alloc;
 use alloc::{vec, vec::Vec};
+use codec::Encode;
 use pallet_grandpa::AuthorityId as GrandpaId;
 use sp_api::impl_runtime_apis;
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 use sp_core::{crypto::KeyTypeId, OpaqueMetadata};
 use sp_runtime::{
 	create_runtime_str, generic, impl_opaque_keys,
-	traits::{BlakeTwo256, Block as BlockT, IdentifyAccount, NumberFor, One, Verify},
+	traits::{
+		BlakeTwo256, Block as BlockT, IdentifyAccount, NumberFor, One, SaturatedConversion, Verify,
+	},
 	transaction_validity::{TransactionSource, TransactionValidity},
 	ApplyExtrinsicResult, MultiSignature,
 };
@@ -47,6 +50,9 @@ pub use sp_runtime::{Perbill, Permill};
 
 /// Import the template pallet.
 pub use pallet_template;
+
+/// Import the offchain worker pallet.
+pub use pallet_example_offchain_worker;
 
 /// An index to a block.
 pub type BlockNumber = u32;
@@ -254,6 +260,16 @@ impl pallet_template::Config for Runtime {
 	type WeightInfo = pallet_template::weights::SubstrateWeight<Runtime>;
 }
 
+/// Configure the offchain worker pallet.
+impl pallet_example_offchain_worker::Config for Runtime {
+	type AuthorityId = pallet_example_offchain_worker::crypto::TestAuthId;
+	type RuntimeEvent = RuntimeEvent;
+	type GracePeriod = ConstU32<5>;
+	type UnsignedInterval = ConstU32<128>;
+	type UnsignedPriority = ConstU64<{ 1 << 20 }>;
+	type MaxPrices = ConstU32<64>;
+}
+
 // Create the runtime by composing the FRAME pallets that were previously configured.
 #[frame_support::runtime]
 mod runtime {
@@ -295,6 +311,10 @@ mod runtime {
 	// Include the custom logic from the pallet-template in the runtime.
 	#[runtime::pallet_index(7)]
 	pub type TemplateModule = pallet_template;
+
+	// Include the offchain worker pallet in the runtime.
+	#[runtime::pallet_index(8)]
+	pub type OffchainWorker = pallet_example_offchain_worker;
 }
 
 /// The address format for describing accounts.
@@ -314,6 +334,60 @@ pub type SignedExtra = (
 	frame_system::CheckWeight<Runtime>,
 	pallet_transaction_payment::ChargeTransactionPayment<Runtime>,
 );
+
+impl frame_system::offchain::SigningTypes for Runtime {
+	type Public = <Signature as Verify>::Signer;
+	type Signature = Signature;
+}
+
+impl<C> frame_system::offchain::SendTransactionTypes<C> for Runtime
+where
+	RuntimeCall: From<C>,
+{
+	type Extrinsic = UncheckedExtrinsic;
+	type OverarchingCall = RuntimeCall;
+}
+
+impl<C> frame_system::offchain::CreateSignedTransaction<C> for Runtime
+where
+	RuntimeCall: From<C>,
+{
+	fn create_transaction<AppC>(
+		call: RuntimeCall,
+		public: <Signature as Verify>::Signer,
+		account: AccountId,
+		nonce: Nonce,
+	) -> Option<(
+		RuntimeCall,
+		<UncheckedExtrinsic as sp_runtime::traits::Extrinsic>::SignaturePayload,
+	)>
+	where
+		AppC: frame_system::offchain::AppCrypto<<Signature as Verify>::Signer, Signature>,
+	{
+		let tip = 0;
+		let period =
+			BlockHashCount::get().checked_next_power_of_two().map(|c| c / 2).unwrap_or(2) as u64;
+		let current_block = System::block_number().saturated_into::<u64>().saturating_sub(1);
+		let era = sp_runtime::generic::Era::mortal(period, current_block);
+
+		let extra: SignedExtra = (
+			frame_system::CheckNonZeroSender::<Runtime>::new(),
+			frame_system::CheckSpecVersion::<Runtime>::new(),
+			frame_system::CheckTxVersion::<Runtime>::new(),
+			frame_system::CheckGenesis::<Runtime>::new(),
+			frame_system::CheckEra::<Runtime>::from(era),
+			frame_system::CheckNonce::<Runtime>::from(nonce),
+			frame_system::CheckWeight::<Runtime>::new(),
+			pallet_transaction_payment::ChargeTransactionPayment::<Runtime>::from(tip),
+		);
+		let raw_payload = SignedPayload::new(call, extra).ok()?;
+		let signature = raw_payload.using_encoded(|payload| AppC::sign(payload, public))?;
+		let (call, extra, _) = raw_payload.deconstruct();
+		let address = sp_runtime::MultiAddress::Id(account);
+
+		Some((call, (address, signature, extra)))
+	}
+}
 
 /// All migrations of the runtime, aside from the ones declared in the pallets.
 ///
