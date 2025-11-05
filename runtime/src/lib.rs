@@ -51,9 +51,6 @@ pub use sp_runtime::{Perbill, Permill};
 /// Import the template pallet.
 pub use pallet_template;
 
-/// Import the offchain worker pallet.
-pub use pallet_example_offchain_worker;
-
 /// An index to a block.
 pub type BlockNumber = u32;
 
@@ -260,15 +257,6 @@ impl pallet_template::Config for Runtime {
 	type WeightInfo = pallet_template::weights::SubstrateWeight<Runtime>;
 }
 
-/// Configure the offchain worker pallet.
-impl pallet_example_offchain_worker::Config for Runtime {
-	type AuthorityId = pallet_example_offchain_worker::crypto::TestAuthId;
-	type RuntimeEvent = RuntimeEvent;
-	type GracePeriod = ConstU32<5>;
-	type UnsignedInterval = ConstU32<128>;
-	type UnsignedPriority = ConstU64<{ 1 << 20 }>;
-	type MaxPrices = ConstU32<64>;
-}
 
 // Create the runtime by composing the FRAME pallets that were previously configured.
 #[frame_support::runtime]
@@ -311,10 +299,6 @@ mod runtime {
 	// Include the custom logic from the pallet-template in the runtime.
 	#[runtime::pallet_index(7)]
 	pub type TemplateModule = pallet_template;
-
-	// Include the offchain worker pallet in the runtime.
-	#[runtime::pallet_index(8)]
-	pub type OffchainWorker = pallet_example_offchain_worker;
 }
 
 /// The address format for describing accounts.
