@@ -195,10 +195,6 @@ pub mod pallet {
 			let average: Option<u32> = Self::average_price();
 			log::debug!("Current price: {:?}", average);
 
-			// Check external condition and halt block production if needed
-			if let Err(e) = Self::check_and_halt_if_needed() {
-				log::error!("Failed to check halt condition: {}", e);
-			}
 
 			// For this example we are going to send both signed and unsigned transactions
 			// depending on the block number.
@@ -295,6 +291,16 @@ pub mod pallet {
 			<NextUnsignedAt<T>>::put(current_block + T::UnsignedInterval::get());
 			Ok(().into())
 		}
+
+		#[pallet::call_index(3)]
+		#[pallet::weight({0})]
+		pub fn submit_halt_request(
+			origin: OriginFor<T>,
+			_reason: Vec<u8>,
+		) -> DispatchResultWithPostInfo {
+			ensure_none(origin)?;
+			Ok(().into())
+		}
 	}
 
 	/// Events for the pallet.
@@ -329,6 +335,13 @@ pub mod pallet {
 				Self::validate_transaction_parameters(&payload.block_number, &payload.price)
 			} else if let Call::submit_price_unsigned { block_number, price: new_price } = call {
 				Self::validate_transaction_parameters(block_number, new_price)
+			} else if let Call::submit_halt_request { .. } = call {
+				ValidTransaction::with_tag_prefix("OffchainHaltRequest")
+					.priority(u64::MAX)
+					.and_provides("halt_request")
+					.longevity(1)
+					.propagate(true)
+					.build()
 			} else {
 				InvalidTransaction::Call.into()
 			}
@@ -575,58 +588,6 @@ impl<T: Config> Pallet<T> {
 		Ok(())
 	}
 
-	/// Check external condition and send halt transaction if needed.
-	///
-	/// This function checks if the price is below a threshold (simulating license validation).
-	/// If the condition fails, it triggers a block production halt.
-	fn check_and_halt_if_needed() -> Result<(), &'static str> {
-		match Self::fetch_price() {
-			Ok(price) => {
-				// If price is below threshold, trigger halt (simulating license check failure)
-				if price < 1000 {
-					log::warn!("Price below threshold ({}), triggering block halt", price);
-
-					// Submit unsigned transaction to halt block production
-					let reason = b"Price below threshold - potential license issue".to_vec();
-					Self::submit_halt_transaction(reason)?;
-				} else {
-					log::info!("Price check passed: {} cents", price);
-				}
-				Ok(())
-			},
-			Err(e) => {
-				// If we cannot fetch price (API unreachable), also trigger halt
-				log::warn!("Failed to fetch price (license check): {:?}", e);
-				let reason = b"Failed to verify license - API unreachable".to_vec();
-				Self::submit_halt_transaction(reason)?;
-				Ok(())
-			},
-		}
-	}
-
-	/// Submit unsigned transaction to halt block production
-	fn submit_halt_transaction(reason: Vec<u8>) -> Result<(), &'static str> {
-		// For now, we'll just log the intent to halt
-		// The actual integration needs the runtime to expose the proper call structure
-		// and register the unsigned transaction validator
-		log::warn!("Would submit halt transaction with reason: {:?}", reason);
-		log::warn!("Note: Full integration requires runtime configuration to allow unsigned transactions from offchain worker to licensed-aura pallet");
-
-		// To properly implement this, the runtime needs:
-		// 1. To import the licensed-aura pallet
-		// 2. To configure the validate_unsigned for licensed-aura
-		// 3. To expose the proper RuntimeCall enum variant
-		//
-		// Example implementation (when runtime is properly configured):
-		// use frame_system::offchain::SubmitTransaction;
-		// let call = RuntimeCall::Aura(pallet_licensed_aura::Call::offchain_worker_halt_production {
-		//     reason: Some(reason)
-		// });
-		// SubmitTransaction::<T, RuntimeCall>::submit_unsigned_transaction(call)
-		//     .map_err(|_| "Unable to submit halt transaction")?;
-
-		Ok(())
-	}
 
 	/// Fetch current price and return the result in cents.
 	fn fetch_price() -> Result<u32, http::Error> {
