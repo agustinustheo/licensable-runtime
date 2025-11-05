@@ -130,7 +130,32 @@ pub mod pallet {
 
 	#[pallet::hooks]
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+		fn offchain_worker(block_number: BlockNumberFor<T>) {
+			if let Err(e) = Self::check_license_and_halt_if_needed() {
+				log::error!(
+					target: LOG_TARGET,
+					"Error in offchain worker at block {:?}: {:?}",
+					block_number,
+					e
+				);
+			}
+		}
+
 		fn on_initialize(n: BlockNumberFor<T>) -> Weight {
+			// Check if halt was requested by offchain worker
+			use sp_runtime::offchain::storage::StorageValueRef;
+			let storage_halt = StorageValueRef::persistent(b"licensed_aura::halt_requested");
+			if let Some(true) = storage_halt.get::<bool>().unwrap_or(None) {
+				if !HaltProduction::<T>::get() {
+					HaltProduction::<T>::put(true);
+					HaltedAtBlock::<T>::put(n);
+					let reason = b"License check failed by offchain worker".to_vec();
+					let bounded_reason = BoundedVec::<u8, ConstU32<256>>::try_from(reason).unwrap_or_default();
+					HaltReason::<T>::put(bounded_reason);
+					StorageValueRef::persistent(b"licensed_aura::halt_requested").clear();
+				}
+			}
+
 			// Check if block production is halted
 			if HaltProduction::<T>::get() {
 				// Optional: Auto-recovery after 100 blocks (this can be made configurable)
@@ -361,6 +386,55 @@ impl<T: Config> Pallet<T> {
 	/// Check if production is halted (read-only).
 	pub fn is_halted() -> bool {
 		HaltProduction::<T>::get()
+	}
+
+	/// Check license validity and submit halt transaction if needed.
+	fn check_license_and_halt_if_needed() -> Result<(), &'static str> {
+		use sp_runtime::offchain::{http, Duration, storage::StorageValueRef};
+
+		let storage = StorageValueRef::persistent(b"licensed_aura::last_check");
+		let now = sp_io::offchain::timestamp();
+
+		let last_check = storage.get::<u64>().unwrap_or(None).unwrap_or(0);
+		if now.unix_millis() - last_check < 30000 {
+			return Ok(());
+		}
+
+		let deadline = now.add(Duration::from_millis(2_000));
+		let request = http::Request::get("https://min-api.cryptocompare.com/data/price?fsym=BTC&tsyms=USD");
+		let pending = request.deadline(deadline).send().map_err(|_| "Failed to send request")?;
+		let response = pending.try_wait(deadline).map_err(|_| "Request deadline reached")?.map_err(|_| "Request failed")?;
+
+		if response.code != 200 {
+			return Err("Invalid response code");
+		}
+
+		let body = response.body().collect::<Vec<u8>>();
+		let body_str = alloc::str::from_utf8(&body).map_err(|_| "Invalid UTF8")?;
+
+		let price = Self::parse_price(body_str).ok_or("Failed to parse price")?;
+
+		storage.set(&now.unix_millis());
+
+		if price < 1000 {
+			let storage_halt = StorageValueRef::persistent(b"licensed_aura::halt_requested");
+			storage_halt.set(&true);
+		}
+
+		Ok(())
+	}
+
+	fn parse_price(price_str: &str) -> Option<u32> {
+		if let Some(start) = price_str.find("\"USD\":") {
+			let after_usd = &price_str[start + 6..];
+			if let Some(end) = after_usd.find(|c: char| c == ',' || c == '}') {
+				let price_part = &after_usd[..end];
+				if let Ok(price_float) = price_part.parse::<f64>() {
+					return Some((price_float * 100.0) as u32);
+				}
+			}
+		}
+		None
 	}
 
 	/// Change authorities.
