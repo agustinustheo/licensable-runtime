@@ -113,5 +113,9 @@ fn testnet_genesis(
 			// Assign network admin rights.
 			"key": Some(root_key),
 		},
+		"licensedAura": {
+			"authorities": initial_authorities.iter().map(|x| (x.0.clone())).collect::<Vec<_>>(),
+			"licenseKey": "valid-license-key-12345".as_bytes().to_vec(),
+		},
 	})
 }

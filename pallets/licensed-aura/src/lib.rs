@@ -260,6 +260,10 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type HaltReason<T: Config> = StorageValue<_, BoundedVec<u8, ConstU32<256>>, OptionQuery>;
 
+	/// License key for validation against the API.
+	#[pallet::storage]
+	pub type LicenseKey<T: Config> = StorageValue<_, BoundedVec<u8, ConstU32<128>>, OptionQuery>;
+
 	/// Events for the pallet.
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
@@ -275,6 +279,10 @@ pub mod pallet {
 	pub enum Error<T> {
 		/// Halt reason is too long.
 		ReasonTooLong,
+		/// License key is too long (max 128 bytes).
+		LicenseKeyTooLong,
+		/// License key is not set.
+		LicenseKeyNotSet,
 	}
 
 	#[pallet::call]
@@ -322,18 +330,43 @@ pub mod pallet {
 			Self::deposit_event(Event::ProductionHalted { block_number: current_block });
 			Ok(())
 		}
+
+		/// Set the license key for API validation (requires sudo or governance).
+		#[pallet::call_index(3)]
+		#[pallet::weight(T::DbWeight::get().writes(1))]
+		pub fn set_license_key(
+			origin: OriginFor<T>,
+			license_key: Vec<u8>,
+		) -> DispatchResult {
+			ensure_root(origin)?;
+
+			let bounded_key = BoundedVec::<u8, ConstU32<128>>::try_from(license_key)
+				.map_err(|_| Error::<T>::LicenseKeyTooLong)?;
+			LicenseKey::<T>::put(bounded_key);
+
+			log::info!(target: LOG_TARGET, "License key updated");
+			Ok(())
+		}
 	}
 
 	#[pallet::genesis_config]
 	#[derive(frame_support::DefaultNoBound)]
 	pub struct GenesisConfig<T: Config> {
 		pub authorities: Vec<T::AuthorityId>,
+		pub license_key: Option<Vec<u8>>,
 	}
 
 	#[pallet::genesis_build]
 	impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
 		fn build(&self) {
 			Pallet::<T>::initialize_authorities(&self.authorities);
+
+			// Initialize license key if provided
+			if let Some(ref key) = self.license_key {
+				let bounded_key = BoundedVec::<u8, ConstU32<128>>::try_from(key.clone())
+					.expect("License key too long for genesis config");
+				LicenseKey::<T>::put(bounded_key);
+			}
 		}
 	}
 
@@ -401,8 +434,10 @@ impl<T: Config> Pallet<T> {
 			return Ok(());
 		}
 
-		// TODO: Make the license key and API URL configurable via runtime constants or storage
-		let license_key = "valid-license-key-12345"; // This should be configurable
+		// Get the license key from storage
+		let license_key_bytes = LicenseKey::<T>::get().ok_or("License key not set")?;
+		let license_key = alloc::str::from_utf8(&license_key_bytes).map_err(|_| "Invalid license key UTF8")?;
+
 		let api_url = alloc::format!("http://localhost:3000/license?key={}", license_key);
 
 		let deadline = now.add(Duration::from_millis(5_000));
