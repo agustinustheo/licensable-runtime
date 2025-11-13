@@ -1,118 +1,158 @@
-# Substrate Node Template
+# Licensable Runtime
 
-A fresh [Substrate](https://substrate.io/) node, ready for hacking :rocket:
+A Substrate-based blockchain runtime with integrated license validation via offchain workers and a NestJS API service
 
-A standalone version of this template is available for each release of Polkadot
-in the [Substrate Developer Hub Parachain
-Template](https://github.com/substrate-developer-hub/substrate-node-template/)
-repository. The parachain template is generated directly at each Polkadot
-release branch from the [Solochain Template in
-Substrate](https://github.com/paritytech/polkadot-sdk/tree/master/templates/solochain)
-upstream
+## Prerequisites
 
-It is usually best to use the stand-alone version to start a new project. All
-bugs, suggestions, and feature requests should be made upstream in the
-[Substrate](https://github.com/paritytech/polkadot-sdk/tree/master/substrate)
-repository.
+- Rust 1.70+ (stable toolchain)
+- Node.js 18+
+- pnpm 8+
+- PostgreSQL (for API service)
 
 ## Getting Started
 
-Depending on your operating system and Rust version, there might be additional
-packages required to compile this template. Check the
-[Install](https://docs.substrate.io/install/) instructions for your platform for
-the most common dependencies. Alternatively, you can use one of the [alternative
-installation](#alternatives-installations) options.
+### 1. Install Dependencies
 
-### Build
+```bash
+# Install root dependencies (prettier, lefthook)
+pnpm install
 
-Use the following command to build the node without launching it:
-
-```sh
-cargo build --package solochain-template-node --release
+# Install API service dependencies
+cd api-service && pnpm install && cd ..
 ```
 
-### Embedded Docs
+### 2. Setup API Service Database
 
-After you build the project, you can use the following command to explore its
-parameters and subcommands:
+Configure your database connection in `api-service/.env`:
 
-```sh
-./target/release/solochain-template-node -h
+```env
+DB_HOST=localhost
+DB_PORT=5432
+DB_USERNAME=postgres
+DB_PASSWORD=password
+DB_NAME=license_db
+PORT=3000
+NODE_ENV=development
 ```
 
-You can generate and view the [Rust
-Docs](https://doc.rust-lang.org/cargo/commands/cargo-doc.html) for this template
-with this command:
+Seed the database with test licenses:
 
-```sh
-cargo +nightly doc --open
+```bash
+cd api-service && pnpm seed && cd ..
 ```
 
-### Single-Node Development Chain
+### 3. Build Everything
 
-The following command starts a single-node development chain that doesn't
-persist state:
+```bash
+# Build both runtime and API service
+pnpm build
 
-```sh
-./target/release/solochain-template-node --dev
+# Or build separately
+pnpm build:runtime  # Substrate runtime
+pnpm build:api      # NestJS API service
 ```
 
-To purge the development chain's state, run the following command:
+## Available Commands
 
-```sh
-./target/release/solochain-template-node purge-chain --dev
+### Development
+
+```bash
+# Run runtime in development mode
+pnpm dev:runtime
+
+# Run API service in development mode
+pnpm dev:api
 ```
 
-To start the development chain with detailed logging, run the following command:
+### Building
 
-```sh
-RUST_BACKTRACE=1 ./target/release/solochain-template-node -ldebug --dev
+```bash
+# Build everything (runtime + API)
+pnpm build
+
+# Build runtime only
+pnpm build:runtime
+
+# Build API service only
+pnpm build:api
 ```
 
-Development chains:
+### Formatting & Linting
 
-- Maintain state in a `tmp` folder while the node is running.
-- Use the **Alice** and **Bob** accounts as default validator authorities.
-- Use the **Alice** account as the default `sudo` account.
-- Are preconfigured with a genesis state (`/node/src/chain_spec.rs`) that
-  includes several pre-funded development accounts.
+```bash
+# Format all code (Rust + API service)
+pnpm format
 
+# Format Rust code only
+pnpm format:rust
 
-To persist chain state between runs, specify a base path by running a command
-similar to the following:
+# Format API service code only
+pnpm format:api
 
-```sh
-// Create a folder to use as the db base path
-$ mkdir my-chain-state
+# Lint Rust code with clippy
+pnpm lint
 
-// Use of that folder to store the chain state
-$ ./target/release/solochain-template-node --dev --base-path ./my-chain-state/
-
-// Check the folder structure created inside the base path after running the chain
-$ ls ./my-chain-state
-chains
-$ ls ./my-chain-state/chains/
-dev
-$ ls ./my-chain-state/chains/dev
-db keystore network
+# Check Rust code without building
+pnpm check
 ```
 
-### Connect with Polkadot-JS Apps Front-End
+### Testing
 
-After you start the node template locally, you can interact with it using the
-hosted version of the [Polkadot/Substrate
-Portal](https://polkadot.js.org/apps/#/explorer?rpc=ws://localhost:9944)
-front-end by connecting to the local node endpoint. A hosted version is also
-available on [IPFS](https://dotapps.io/). You can
-also find the source code and instructions for hosting your own instance in the
-[`polkadot-js/apps`](https://github.com/polkadot-js/apps) repository.
+```bash
+# Run all tests
+pnpm test
+```
 
-### Multi-Node Local Testnet
+### Cleanup
 
-If you want to see the multi-node consensus algorithm in action, see [Simulate a
-network](https://docs.substrate.io/tutorials/build-a-blockchain/simulate-network/).
+```bash
+# Clean all build artifacts
+pnpm clean
+```
 
-## Template Structure
+## Git Hooks
+
+This project uses [Lefthook](https://github.com/evilmartians/lefthook) for git hooks:
+
+- **pre-commit**: Runs formatting checks and clippy linting
+- **pre-push**: Runs tests and compilation checks
+
+Hooks are automatically installed when you run `pnpm install`.
+
+## Architecture
+
+### License Validation Flow
+
+1. **Offchain Worker** (in `licensed-aura` pallet) checks license every 30 seconds
+2. Calls **License API** (`http://localhost:3000/license?key={license_key}`)
+3. If response is not `200` or `{"valid": false}`, triggers halt
+4. **On Initialize** checks halt flag and panics to prevent block production
+5. Auto-recovery after 100 blocks (configurable)
+
+### Setting License Key
+
+The license key can be set via:
+
+1. **Genesis config** (see `node/src/chain_spec.rs`)
+2. **Runtime extrinsic**: `licensedAura.setLicenseKey(key)` (requires sudo)
+
+## Project Structure
+
+```
+.
+├── api-service/          # NestJS license validation API
+│   ├── src/
+│   │   ├── controllers/  # API endpoints
+│   │   ├── services/     # Business logic
+│   │   └── entities/     # TypeORM models
+│   └── package.json
+├── node/                 # Substrate node implementation
+├── pallets/
+│   └── licensed-aura/    # Custom Aura pallet with license validation
+├── runtime/              # Runtime configuration
+├── lefthook.yml          # Git hooks configuration
+└── package.json          # Root package with all commands
+```
 
 A Substrate project such as this consists of a number of components that are
 spread across a few directories.

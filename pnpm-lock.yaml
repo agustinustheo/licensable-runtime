@@ -1,0 +1,36 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    devDependencies:
+      '@arkweid/lefthook':
+        specifier: ^0.7.7
+        version: 0.7.7
+      prettier:
+        specifier: ^3.4.2
+        version: 3.7.1
+
+packages:
+
+  '@arkweid/lefthook@0.7.7':
+    resolution: {integrity: sha512-Eq30OXKmjxIAIsTtbX2fcF3SNZIXS8yry1u8yty7PQFYRctx04rVlhOJCEB2UmfTh8T2vrOMC9IHHUvvo5zbaQ==}
+    cpu: [x64, arm64, ia32]
+    os: [darwin, linux, win32]
+    deprecated: '@arkweid/lefthook has been renamed to @evilmartians/lefthook, please upgrade to it. You also can use @evilmartians/lefthook-installer'
+    hasBin: true
+
+  prettier@3.7.1:
+    resolution: {integrity: sha512-RWKXE4qB3u5Z6yz7omJkjWwmTfLdcbv44jUVHC5NpfXwFGzvpQM798FGv/6WNK879tc+Cn0AAyherCl1KjbyZQ==}
+    engines: {node: '>=14'}
+    hasBin: true
+
+snapshots:
+
+  '@arkweid/lefthook@0.7.7': {}
+
+  prettier@3.7.1: {}

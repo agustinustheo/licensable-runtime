@@ -7,7 +7,8 @@
     "start": "ts-node -r tsconfig-paths/register src/main.ts",
     "start:dev": "ts-node -r tsconfig-paths/register --watch src/main.ts",
     "build": "tsc",
-    "seed": "ts-node -r tsconfig-paths/register src/seed.ts"
+    "seed": "ts-node -r tsconfig-paths/register src/seed.ts",
+    "format": "prettier --write \"src/**/*.{js,ts,json}\""
   },
   "keywords": [],
   "author": "",
@@ -15,6 +16,7 @@
   "devDependencies": {
     "@nestjs/cli": "^11.0.12",
     "@types/node": "^24.10.1",
+    "prettier": "^3.4.2",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.9.3"

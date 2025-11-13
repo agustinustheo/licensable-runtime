@@ -7,7 +7,7 @@ import { License } from '../entities/license.entity';
 export class LicenseService {
   constructor(
     @InjectRepository(License)
-    private readonly licenseRepository: Repository<License>,
+    private readonly licenseRepository: Repository<License>
   ) {}
 
   async validateLicense(key: string): Promise<boolean> {

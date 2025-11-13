@@ -1,0 +1,37 @@
+{
+  "name": "licensable-runtime",
+  "version": "1.0.0",
+  "description": "Substrate runtime with license validation via offchain worker",
+  "private": true,
+  "scripts": {
+    "build": "pnpm build:runtime && pnpm build:api",
+    "build:runtime": "cargo build --release",
+    "build:api": "cd api-service && pnpm build",
+    "dev:runtime": "cargo build && cargo run -- --dev",
+    "dev:api": "cd api-service && pnpm start:dev",
+    "format": "pnpm format:rust && pnpm format:api",
+    "format:rust": "cargo fmt --all",
+    "format:api": "cd api-service && pnpm format",
+    "lint": "pnpm lint:rust",
+    "lint:rust": "cargo clippy --all-targets --all-features -- -D warnings",
+    "check": "cargo check --all-targets --all-features",
+    "test": "cargo test --all",
+    "clean": "cargo clean && cd api-service && rm -rf dist node_modules",
+    "prepare": "lefthook install"
+  },
+  "keywords": [
+    "substrate",
+    "blockchain",
+    "license",
+    "validation"
+  ],
+  "author": "",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@evilmartians/lefthook": "^1.10.6"
+  },
+  "engines": {
+    "node": ">=18",
+    "pnpm": ">=8"
+  }
+}
