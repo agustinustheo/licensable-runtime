@@ -115,7 +115,7 @@ pnpm clean
 This project uses [Lefthook](https://github.com/evilmartians/lefthook) for git hooks:
 
 - **pre-commit**: Runs formatting checks and clippy linting
-- **pre-push**: Runs tests and compilation checks
+- **pre-push**: Runs release build to ensure compilation succeeds
 
 Hooks are automatically installed when you run `pnpm install`.
 

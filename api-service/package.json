@@ -11,8 +11,8 @@
     "format": "prettier --write \"src/**/*.{js,ts,json}\""
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "Agustinus Theodorus",
+  "license": "MIT",
   "devDependencies": {
     "@nestjs/cli": "^11.0.12",
     "@types/node": "^24.10.1",

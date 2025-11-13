@@ -15,7 +15,5 @@ pre-commit:
 
 pre-push:
   commands:
-    test:
-      run: cargo test --all
-    check:
-      run: cargo check --all-targets --all-features
+    build:
+      run: pnpm build

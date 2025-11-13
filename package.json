@@ -25,8 +25,8 @@
     "license",
     "validation"
   ],
-  "author": "",
-  "license": "Apache-2.0",
+  "author": "Agustinus Theodorus",
+  "license": "MIT",
   "devDependencies": {
     "@evilmartians/lefthook": "^1.10.6"
   },
