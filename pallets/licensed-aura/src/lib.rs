@@ -396,45 +396,71 @@ impl<T: Config> Pallet<T> {
 		let now = sp_io::offchain::timestamp();
 
 		let last_check = storage.get::<u64>().unwrap_or(None).unwrap_or(0);
+		// Check every 30 seconds
 		if now.unix_millis() - last_check < 30000 {
 			return Ok(());
 		}
 
-		let deadline = now.add(Duration::from_millis(2_000));
-		let request = http::Request::get("https://min-api.cryptocompare.com/data/price?fsym=BTC&tsyms=USD");
-		let pending = request.deadline(deadline).send().map_err(|_| "Failed to send request")?;
-		let response = pending.try_wait(deadline).map_err(|_| "Request deadline reached")?.map_err(|_| "Request failed")?;
+		// TODO: Make the license key and API URL configurable via runtime constants or storage
+		let license_key = "valid-license-key-12345"; // This should be configurable
+		let api_url = alloc::format!("http://localhost:3000/license?key={}", license_key);
 
-		if response.code != 200 {
-			return Err("Invalid response code");
-		}
+		let deadline = now.add(Duration::from_millis(5_000));
+		let request = http::Request::get(&api_url);
+		let pending = request.deadline(deadline).send().map_err(|_| "Failed to send license check request")?;
+		let response = pending.try_wait(deadline).map_err(|_| "License check request deadline reached")?.map_err(|_| "License check request failed")?;
 
-		let body = response.body().collect::<Vec<u8>>();
-		let body_str = alloc::str::from_utf8(&body).map_err(|_| "Invalid UTF8")?;
-
-		let price = Self::parse_price(body_str).ok_or("Failed to parse price")?;
-
+		// Update last check timestamp
 		storage.set(&now.unix_millis());
 
-		if price < 1000 {
+		// Check if response is not 200 OR if body doesn't contain valid: true
+		let is_valid = if response.code == 200 {
+			let body = response.body().collect::<Vec<u8>>();
+			let body_str = alloc::str::from_utf8(&body).map_err(|_| "Invalid UTF8 in response")?;
+
+			// Parse JSON response to check if valid: true
+			Self::parse_license_response(body_str)
+		} else {
+			log::error!(
+				target: LOG_TARGET,
+				"License check failed with HTTP status: {}",
+				response.code
+			);
+			false
+		};
+
+		// If license is invalid, request halt
+		if !is_valid {
+			log::error!(
+				target: LOG_TARGET,
+				"License validation failed! Requesting block production halt."
+			);
 			let storage_halt = StorageValueRef::persistent(b"licensed_aura::halt_requested");
 			storage_halt.set(&true);
+		} else {
+			log::info!(
+				target: LOG_TARGET,
+				"License validation successful."
+			);
 		}
 
 		Ok(())
 	}
 
-	fn parse_price(price_str: &str) -> Option<u32> {
-		if let Some(start) = price_str.find("\"USD\":") {
-			let after_usd = &price_str[start + 6..];
-			if let Some(end) = after_usd.find(|c: char| c == ',' || c == '}') {
-				let price_part = &after_usd[..end];
-				if let Ok(price_float) = price_part.parse::<f64>() {
-					return Some((price_float * 100.0) as u32);
-				}
+	/// Parse the license API response to check if valid: true
+	fn parse_license_response(response_str: &str) -> bool {
+		// Simple JSON parsing to find "valid":true or "valid": true
+		// This is a basic implementation - in production, consider using a proper JSON parser
+		if let Some(start) = response_str.find("\"valid\"") {
+			let after_valid = &response_str[start + 7..];
+			// Skip whitespace and colon
+			let trimmed = after_valid.trim_start();
+			if let Some(colon_trimmed) = trimmed.strip_prefix(':') {
+				let value_part = colon_trimmed.trim_start();
+				return value_part.starts_with("true");
 			}
 		}
-		None
+		false
 	}
 
 	/// Change authorities.
