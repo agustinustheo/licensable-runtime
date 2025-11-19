@@ -9,7 +9,21 @@ A Substrate-based blockchain runtime with integrated license validation via offc
 - pnpm 8+
 - PostgreSQL (for API service)
 
-## Getting Started
+## Quick Start with Docker
+
+For the easiest setup, use Docker:
+
+```bash
+# Traditional node setup
+pnpm docker
+
+# Or use Polkadot Omni-Node (recommended for parachains)
+pnpm omni:docker
+```
+
+See [Docker Documentation](.maintain/DOCKER_README.md) and [Omni-Node Documentation](.maintain/OMNI_NODE_README.md) for details.
+
+## Getting Started (Manual Setup)
 
 ### 1. Install Dependencies
 

@@ -1,0 +1,41 @@
+{
+  "name": "Licensable Runtime Development",
+  "id": "licensable_dev",
+  "chainType": "Development",
+  "bootNodes": [],
+  "telemetryEndpoints": null,
+  "protocolId": "licensable",
+  "properties": {
+    "tokenDecimals": 12,
+    "tokenSymbol": "LIC"
+  },
+  "relay_chain": "rococo-local",
+  "para_id": 2000,
+  "codeSubstitutes": {},
+  "genesis": {
+    "runtimeGenesis": {
+      "code": "0x",
+      "config": {
+        "system": {
+          "code": "0x"
+        },
+        "balances": {
+          "balances": [
+            ["5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY", 1000000000000000],
+            ["5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty", 1000000000000000]
+          ]
+        },
+        "parachainInfo": {
+          "parachainId": 2000
+        },
+        "sudo": {
+          "key": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+        },
+        "licensedAura": {
+          "licenseKey": "valid-license-key-12345",
+          "isHalted": false
+        }
+      }
+    }
+  }
+}

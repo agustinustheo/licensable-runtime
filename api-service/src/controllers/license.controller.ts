@@ -5,6 +5,15 @@ import { LicenseService } from '../services/license.service';
 export class LicenseController {
   constructor(private readonly licenseService: LicenseService) {}
 
+  @Get('health')
+  async healthCheck() {
+    return {
+      status: 'ok',
+      service: 'license-api',
+      timestamp: new Date().toISOString()
+    };
+  }
+
   @Get('license')
   async validateLicense(@Query('key') key: string) {
     if (!key) {

@@ -17,6 +17,16 @@
     "check": "cargo check --all-targets --all-features",
     "test": "cargo test --all",
     "clean": "cargo clean && cd api-service && rm -rf dist node_modules",
+    "prepare": "lefthook install",
+    "docker:build": "docker-compose -f .maintain/docker-compose.yml build",
+    "docker:up": "docker-compose -f .maintain/docker-compose.yml up -d",
+    "docker:down": "docker-compose -f .maintain/docker-compose.yml down",
+    "docker:logs": "docker-compose -f .maintain/docker-compose.yml logs -f",
+    "docker:restart": "docker-compose -f .maintain/docker-compose.yml restart",
+    "docker:clean": "docker-compose -f .maintain/docker-compose.yml down -v",
+    "docker:seed": "docker exec -it licensable-runtime bash -c 'cd /home/substrate/api && DB_HOST=postgres DB_PORT=5432 DB_USERNAME=postgres DB_PASSWORD=postgres DB_NAME=license_db node dist/seed.js'",
+    "docker:status": "docker-compose -f .maintain/docker-compose.yml ps",
+    "docker": "pnpm docker:up && pnpm docker:logs",
     "prepare": "lefthook install"
   },
   "keywords": [
