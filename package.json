@@ -27,7 +27,13 @@
     "docker:seed": "docker exec -it licensable-runtime bash -c 'cd /home/substrate/api && DB_HOST=postgres DB_PORT=5432 DB_USERNAME=postgres DB_PASSWORD=postgres DB_NAME=license_db node dist/seed.js'",
     "docker:status": "docker-compose -f .maintain/docker-compose.yml ps",
     "docker": "pnpm docker:up && pnpm docker:logs",
-    "prepare": "lefthook install"
+    "omni:build": "bash .maintain/build-omni-node.sh",
+    "omni:docker:build": "docker-compose -f .maintain/docker-compose.omni-node.yml build",
+    "omni:docker:up": "docker-compose -f .maintain/docker-compose.omni-node.yml up -d",
+    "omni:docker:down": "docker-compose -f .maintain/docker-compose.omni-node.yml down",
+    "omni:docker:logs": "docker-compose -f .maintain/docker-compose.omni-node.yml logs -f",
+    "omni:docker:clean": "docker-compose -f .maintain/docker-compose.omni-node.yml down -v",
+    "omni:docker": "pnpm omni:docker:up && pnpm omni:docker:logs"
   },
   "keywords": [
     "substrate",
