@@ -10,7 +10,7 @@ export class LicenseController {
     return {
       status: 'ok',
       service: 'license-api',
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     };
   }
 

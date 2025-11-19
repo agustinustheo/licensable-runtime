@@ -43,7 +43,7 @@ extra-unused-type-parameters = { level = "allow", priority = 2 }     # stylistic
 default_constructed_unit_structs = { level = "allow", priority = 2 } # stylistic
 
 [workspace.dependencies]
-solochain-template-runtime = { path = "./runtime", default-features = false }
+licensable-parachain-runtime = { path = "./runtime", default-features = false }
 lite-json = { version = "0.2.0", default-features = false }
 log = { version = "0.4.21", default-features = false }
 

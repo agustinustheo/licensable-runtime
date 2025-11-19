@@ -87,6 +87,7 @@ impl pallet_aura::Config for Test {
     type MaxAuthorities = ConstU32<10>;
     type AllowMultipleBlocksPerSlot = AllowMultipleBlocksPerSlot;
     type SlotDuration = ConstU64<SLOT_DURATION>;
+    type RuntimeEvent = RuntimeEvent;
 }
 
 fn build_ext(authorities: Vec<u64>) -> sp_io::TestExternalities {
@@ -98,6 +99,7 @@ fn build_ext(authorities: Vec<u64>) -> sp_io::TestExternalities {
             .into_iter()
             .map(|a| UintAuthorityId(a).to_public_key())
             .collect(),
+        license_key: Some(b"test-license-key".to_vec()),
     }
     .assimilate_storage(&mut storage)
     .unwrap();
