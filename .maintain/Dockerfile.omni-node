@@ -17,7 +17,7 @@ WORKDIR /build
 # Clone and build polkadot-omni-node from the SDK
 RUN git clone --depth 1 https://github.com/paritytech/polkadot-sdk.git && \
     cd polkadot-sdk && \
-    cargo build --release -p polkadot-omni-node -p chain-spec-builder
+    cargo build --release -p polkadot-omni-node -p staging-chain-spec-builder
 
 # Stage 3: Build NestJS API
 FROM node:18-alpine as api-builder
@@ -57,7 +57,7 @@ RUN useradd -m -u 1001 -U -s /bin/bash -d /home/substrate substrate && \
 
 # Copy omni-node binary and chain-spec-builder
 COPY --from=omni-node-builder /build/polkadot-sdk/target/release/polkadot-omni-node /usr/local/bin/
-COPY --from=omni-node-builder /build/polkadot-sdk/target/release/chain-spec-builder /usr/local/bin/
+COPY --from=omni-node-builder /build/polkadot-sdk/target/release/staging-chain-spec-builder /usr/local/bin/chain-spec-builder
 RUN chmod +x /usr/local/bin/polkadot-omni-node /usr/local/bin/chain-spec-builder
 
 # Copy runtime WASM

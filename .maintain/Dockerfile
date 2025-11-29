@@ -8,7 +8,7 @@ COPY . /build
 
 # Build the Substrate node
 RUN cargo fetch && \
-    cargo build --locked --release
+    cargo build --release
 
 # Stage 2: Build NestJS API
 FROM node:18-alpine as api-builder

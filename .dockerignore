@@ -1,0 +1,62 @@
+# Rust build artifacts
+target/
+**/target/
+
+# Cargo files
+**/*.rs.bk
+
+# Node modules and build
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+.next/
+out/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Docker
+.dockerignore
+Dockerfile*
+docker-compose*.yml
+
+# Documentation
+README.md
+*.md
+docs/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Test files
+**/tests/
+**/*_test.rs
+**/*_tests.rs
+
+# Logs
+*.log
+logs/
+
+# Maintenance scripts (exclude shell scripts but keep configs)
+.maintain/*.sh
+.maintain/build-omni-node.sh
+
+# Other
+*.tmp
+*.cache
