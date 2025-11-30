@@ -57,7 +57,7 @@ RUN useradd -m -u 1001 -U -s /bin/bash -d /home/substrate substrate && \
 
 # Copy omni-node binary and chain-spec-builder
 COPY --from=omni-node-builder /build/polkadot-sdk/target/release/polkadot-omni-node /usr/local/bin/
-COPY --from=omni-node-builder /build/polkadot-sdk/target/release/staging-chain-spec-builder /usr/local/bin/chain-spec-builder
+COPY --from=omni-node-builder /build/polkadot-sdk/target/release/chain-spec-builder /usr/local/bin/chain-spec-builder
 RUN chmod +x /usr/local/bin/polkadot-omni-node /usr/local/bin/chain-spec-builder
 
 # Copy runtime WASM

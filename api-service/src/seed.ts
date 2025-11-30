@@ -25,7 +25,7 @@ async function seed() {
     const licenseRepository = AppDataSource.getRepository(License);
 
     // Clear existing licenses
-    await licenseRepository.delete({});
+    await licenseRepository.createQueryBuilder().delete().from(License).execute();
 
     // Create sample licenses
     const now = new Date();
