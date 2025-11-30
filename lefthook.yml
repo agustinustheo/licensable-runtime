@@ -7,7 +7,7 @@ pre-commit:
       stage_fixed: true
     format-api:
       glob: "api-service/**/*.{js,ts,json}"
-      run: cd api-service && prettier --check {staged_files}
+      run: pnpm format:api
       stage_fixed: true
     lint-rust:
       glob: "*.rs"

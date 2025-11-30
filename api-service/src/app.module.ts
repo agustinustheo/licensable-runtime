@@ -11,7 +11,7 @@ import { LicenseController } from './controllers/license.controller';
       host: process.env.DB_HOST || 'localhost',
       port: parseInt(process.env.DB_PORT || '5432'),
       username: process.env.DB_USERNAME || 'postgres',
-      password: process.env.DB_PASSWORD || 'password',
+      password: process.env.DB_PASSWORD || 'postgres',
       database: process.env.DB_NAME || 'license_db',
       entities: [License],
       synchronize: true,

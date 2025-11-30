@@ -15,27 +15,55 @@ A Substrate-based blockchain runtime with integrated license validation via offc
 
 ## Quick Start with Docker
 
-For the easiest setup, use Docker:
+For the easiest setup, use the convenience script or Docker:
 
 ```bash
-# Traditional node setup
+# Using the convenience script (recommended)
+.maintain/start-local.sh
+
+# Or use pnpm scripts
 pnpm docker
 
-# Or use Polkadot Omni-Node (recommended for parachains)
-pnpm omni:docker
+# For Polkadot Omni-Node (recommended for parachains)
+.maintain/start-local.sh --omni
+# Or: pnpm omni:docker
 ```
 
 ## Docker Setup
 
-This Docker setup runs both the Substrate node and NestJS licensing API together in a single container, with PostgreSQL as the database.
+This project uses a **microservices architecture** with three separate Docker containers:
 
 ### Architecture
 
-The Docker setup includes:
-- **Substrate Node**: Running on ports 9933 (RPC), 9944 (WebSocket), 30333 (P2P)
-- **NestJS API**: Running on port 3000 for license validation
-- **PostgreSQL**: Database for storing license information
-- **Supervisor**: Process manager to run both services concurrently
+```
+┌─────────────────────────────────────────────────────────┐
+│                   Docker Network                        │
+│                                                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐ │
+│  │  PostgreSQL  │  │  NestJS API  │  │   Substrate  │ │
+│  │   Database   │  │   Service    │  │     Node     │ │
+│  │              │  │              │  │              │ │
+│  │  Container:  │◄─┤  Container:  │  │  Container:  │ │
+│  │  postgres    │  │  api         │  │  substrate   │ │
+│  │              │  │              │  │              │ │
+│  │  Port: 5432  │  │  Port: 3000  │  │  Port: 9933  │ │
+│  │              │  │              │  │  Port: 9944  │ │
+│  │              │  │              │  │  Port: 30333 │ │
+│  └──────────────┘  └──────────────┘  └──────────────┘ │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Services**:
+- **PostgreSQL** (`licensable-postgres`): Database for storing license information
+- **NestJS API** (`licensable-api`): REST API for license validation (port 3000)
+- **Substrate Node** (`licensable-substrate`): Blockchain node with offchain workers (ports 9933, 9944, 30333, 9615)
+
+**Benefits**:
+- Microservices architecture with clear separation of concerns
+- Independent scaling and lifecycle management
+- Single process per container (Docker best practice)
+- Easier debugging with separate logs per service
 
 ### Quick Start with Docker
 
@@ -95,10 +123,8 @@ Run the seed script to create sample licenses:
 # Using npm/pnpm script
 pnpm docker:seed
 
-# Or manually connect to the container
-docker exec -it licensable-runtime bash
-cd /home/substrate/api
-DB_HOST=postgres DB_PORT=5432 DB_USERNAME=postgres DB_PASSWORD=postgres DB_NAME=license_db node dist/seed.js
+# Or manually connect to the API container
+docker exec -it licensable-api sh -c 'cd /app && node dist/seed.js'
 ```
 
 #### Sample License Keys
@@ -133,7 +159,7 @@ The Substrate node runs with these default options:
 - `--rpc-cors all`: Allow all CORS origins
 - `--rpc-methods unsafe`: Enable all RPC methods
 
-For production, modify the command in the Dockerfile's supervisor configuration.
+For production, modify the CMD directive in `.maintain/Dockerfile`.
 
 ### Docker Monitoring
 
@@ -145,21 +171,24 @@ pnpm docker:logs
 
 # Or using docker-compose directly
 docker-compose -f .maintain/docker-compose.yml logs -f
-docker-compose -f .maintain/docker-compose.yml logs -f licensable-runtime
-docker-compose -f .maintain/docker-compose.yml logs -f postgres
 
-# Inside container - Supervisor logs
-docker exec -it licensable-runtime tail -f /var/log/supervisor/substrate.log
-docker exec -it licensable-runtime tail -f /var/log/supervisor/api.log
+# View specific service logs
+docker logs licensable-substrate -f   # Substrate node
+docker logs licensable-api -f          # NestJS API
+docker logs licensable-postgres -f     # PostgreSQL
 ```
 
 #### Health Checks
 
-The container includes a health check that verifies both services are running:
+Each container includes health checks:
 
 ```bash
-# Check container health status
+# Check all container health statuses
 docker ps --format "table {{.Names}}\t{{.Status}}"
+
+# Test service endpoints
+curl http://localhost:9933          # Substrate RPC
+curl http://localhost:3000/health   # API health check
 ```
 
 ### Docker Development
@@ -167,23 +196,30 @@ docker ps --format "table {{.Names}}\t{{.Status}}"
 #### Rebuild After Code Changes
 
 ```bash
-# Using npm/pnpm scripts
+# Using npm/pnpm scripts (rebuilds all services)
 pnpm docker:build
 pnpm docker:restart
 
-# Or using docker-compose directly
-docker-compose -f .maintain/docker-compose.yml build
+# Or rebuild specific service
+docker-compose -f .maintain/docker-compose.yml build api
+docker-compose -f .maintain/docker-compose.yml build substrate
 docker-compose -f .maintain/docker-compose.yml up -d
+
+# Or use the convenience script
+.maintain/start-local.sh --build
 ```
 
-#### Connect to Running Container
+#### Connect to Running Containers
 
 ```bash
-# Open bash shell in container
-docker exec -it licensable-runtime bash
+# Open shell in Substrate node container
+docker exec -it licensable-substrate bash
 
-# Check supervisor status
-docker exec -it licensable-runtime supervisorctl status
+# Open shell in API container
+docker exec -it licensable-api sh
+
+# Connect to PostgreSQL
+docker exec -it licensable-postgres psql -U postgres -d license_db
 ```
 
 ### Docker Troubleshooting
@@ -194,19 +230,23 @@ docker exec -it licensable-runtime supervisorctl status
 ```bash
 pnpm docker:logs
 # or
-docker-compose -f .maintain/docker-compose.yml logs licensable-runtime
+docker logs licensable-substrate
+docker logs licensable-api
+docker logs licensable-postgres
 ```
 
-2. Verify PostgreSQL is healthy:
+2. Verify all services are healthy:
 ```bash
 pnpm docker:status
 # or
 docker-compose -f .maintain/docker-compose.yml ps
 ```
 
-3. Manually restart services inside container:
+3. Restart individual services:
 ```bash
-docker exec -it licensable-runtime supervisorctl restart all
+docker-compose -f .maintain/docker-compose.yml restart substrate
+docker-compose -f .maintain/docker-compose.yml restart api
+docker-compose -f .maintain/docker-compose.yml restart postgres
 ```
 
 #### Database Connection Issues
@@ -246,7 +286,15 @@ For production deployment:
 
 ### Docker Architecture Details
 
-#### Multi-Stage Build
+The project uses separate Dockerfiles for each service:
+
+- **`.maintain/Dockerfile`**: Substrate node only (no supervisor, single process)
+- **`.maintain/Dockerfile.api`**: NestJS API service only
+- **PostgreSQL**: Official `postgres:15-alpine` image
+
+For detailed architecture documentation, see [`.maintain/DOCKER-ARCHITECTURE.md`](.maintain/DOCKER-ARCHITECTURE.md).
+
+#### Multi-Stage Builds
 
 The Dockerfile uses a multi-stage build process:
 

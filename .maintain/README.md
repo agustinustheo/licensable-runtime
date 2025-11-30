@@ -6,24 +6,75 @@ This directory contains all Docker-related files and maintenance documentation f
 
 ```
 .maintain/
-├── Dockerfile                    # Main Docker build file for traditional node
-├── docker-compose.yml            # Docker Compose configuration for traditional setup
+├── Dockerfile                    # Substrate node only (microservice)
+├── Dockerfile.api                # NestJS API only (microservice)
+├── docker-compose.yml            # Multi-container setup (Substrate + API + PostgreSQL)
 ├── Dockerfile.omni-node          # Docker build file for Polkadot Omni-Node setup
 ├── docker-compose.omni-node.yml  # Docker Compose configuration for Omni-Node
 ├── parachain-spec-template.json  # Chain specification template for parachain
-└── .env.docker                   # Docker environment configuration
+├── start-local.sh                # Convenience script for local development
+├── DOCKER-ARCHITECTURE.md        # Detailed architecture documentation
+├── .env.docker                   # Docker environment configuration
+└── README.md                     # This file
 ```
+
+## Architecture Overview
+
+The project uses a **microservices architecture** with three separate containers:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                   Docker Network                        │
+│                                                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐ │
+│  │  PostgreSQL  │  │  NestJS API  │  │   Substrate  │ │
+│  │   Database   │  │   Service    │  │     Node     │ │
+│  │              │  │              │  │              │ │
+│  │  Port: 5432  │◄─┤  Port: 3000  │  │  Port: 9933  │ │
+│  │              │  │              │  │  Port: 9944  │ │
+│  └──────────────┘  └──────────────┘  └──────────────┘ │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Containers
+
+| Container | Purpose | Dockerfile | Image |
+|-----------|---------|------------|-------|
+| `licensable-postgres` | PostgreSQL database | Official image | `postgres:15-alpine` |
+| `licensable-api` | NestJS API service | `Dockerfile.api` | `maintain-api:latest` |
+| `licensable-substrate` | Substrate blockchain node | `Dockerfile` | `maintain-substrate:latest` |
 
 ## Quick Start Commands
 
-### Traditional Node Setup
+### Using the Convenience Script (Recommended)
 
 ```bash
-# Build and start everything with Docker
-pnpm docker
+# Start with traditional node (uses existing images if available)
+.maintain/start-local.sh
 
-# Or use individual commands:
-pnpm docker:build     # Build the Docker images
+# Force rebuild and start
+.maintain/start-local.sh --build
+
+# Start with Polkadot Omni-Node
+.maintain/start-local.sh --omni
+
+# Clean start (remove all data)
+.maintain/start-local.sh --clean
+
+# Rebuild omni-node setup
+.maintain/start-local.sh --omni --build
+
+# Show help
+.maintain/start-local.sh --help
+```
+
+### Using pnpm Scripts
+
+```bash
+# Traditional node setup
+pnpm docker           # Build and start with logs
+pnpm docker:build     # Build all Docker images
 pnpm docker:up        # Start all services
 pnpm docker:logs      # View logs
 pnpm docker:status    # Check service status
@@ -31,89 +82,130 @@ pnpm docker:down      # Stop all services
 pnpm docker:clean     # Stop and remove volumes
 pnpm docker:restart   # Restart all services
 pnpm docker:seed      # Seed the database with test data
-```
 
-### Polkadot Omni-Node Setup
-
-```bash
-# Build and run with omni-node (recommended for parachains)
-pnpm omni:docker
-
-# Or use individual commands:
-pnpm omni:docker:build   # Build the Docker image
-pnpm omni:docker:up      # Start services
-pnpm omni:docker:logs    # View logs
+# Polkadot Omni-Node setup
+pnpm omni:docker           # Build and start omni-node
+pnpm omni:docker:build     # Build omni-node image
+pnpm omni:docker:up        # Start omni-node services
+pnpm omni:docker:logs      # View omni-node logs
+pnpm omni:docker:down      # Stop omni-node services
+pnpm omni:docker:clean     # Clean omni-node data
 ```
 
 ## Docker Configuration Details
 
-### Traditional Node (Dockerfile)
+### Microservices Architecture
 
-The main `Dockerfile` creates a multi-stage build:
+Unlike traditional monolithic setups, this project separates concerns into individual services:
 
-1. **Stage 1 - Rust Builder**: Builds the Substrate node
-2. **Stage 2 - Node.js Builder**: Builds the NestJS API
-3. **Stage 3 - Runtime**: Combines both binaries with Supervisor
+#### 1. Substrate Node (`Dockerfile`)
 
-**Key Features:**
-- Uses Ubuntu 22.04 as base runtime image
-- Installs Supervisor for process management
-- Runs both substrate node and API service concurrently
-- Non-root user setup (`substrate` user)
-- Health check endpoint on port 3000
+**Purpose**: Build and run only the Substrate blockchain node
 
-### Omni-Node Setup (Dockerfile.omni-node)
+**Multi-stage Build**:
+1. **Builder Stage**: Uses `paritytech/ci-unified` to compile Rust binary
+2. **Runtime Stage**: Minimal Ubuntu image with only the node binary
+
+**Key Features**:
+- Single process per container (no supervisor)
+- Runs as non-root user (`substrate`)
+- Minimal dependencies (curl, ca-certificates)
+- Health check on RPC endpoint (port 9933)
+- Volume for blockchain data persistence
+
+**Ports Exposed**:
+- `30333` - P2P networking
+- `9933` - RPC HTTP endpoint
+- `9944` - RPC WebSocket endpoint
+- `9615` - Prometheus metrics
+
+#### 2. NestJS API Service (`Dockerfile.api`)
+
+**Purpose**: Build and run only the NestJS license API service
+
+**Multi-stage Build**:
+1. **Builder Stage**: Builds TypeScript application with pnpm
+2. **Runtime Stage**: Minimal Node.js Alpine image
+
+**Key Features**:
+- Waits for PostgreSQL before starting
+- Auto-creates database if missing
+- Runs as non-root user (`nestjs`)
+- Health check on `/health` endpoint
+- Includes postgresql-client for database operations
+
+**Ports Exposed**:
+- `3000` - REST API endpoint
+
+#### 3. PostgreSQL Database
+
+**Purpose**: Store license information
+
+**Configuration**:
+- Official `postgres:15-alpine` image
+- Persistent volume for data
+- Health check with `pg_isready`
+
+**Ports Exposed**:
+- `5432` - PostgreSQL server
+
+### Omni-Node Setup (`Dockerfile.omni-node`)
 
 The `Dockerfile.omni-node` is optimized for parachain deployment:
 
 1. **Stage 1**: Builds the runtime WASM only
 2. **Stage 2**: Builds the NestJS API
-3. **Stage 3**: Uses pre-built `polkadot-omni-node` binary
+3. **Stage 3**: Uses pre-built `polkadot-omni-node` binary + supervisor
 
-**Key Differences from Traditional:**
+**Key Differences from Traditional**:
 - Builds only runtime WASM (not full node)
 - Uses official `polkadot-omni-node` binary
 - Includes chain-spec generation
 - Configured for parachain consensus
+- Still uses supervisor (combined container)
 
 ### Docker Compose Configurations
 
 #### Traditional Setup (`docker-compose.yml`)
 
+Three-service microservices architecture:
+
 ```yaml
 services:
   postgres:
-    image: postgres:14
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: license_db
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+    image: postgres:15-alpine
+    container_name: licensable-postgres
+    # Database configuration
 
-  licensable-runtime:
+  api:
     build:
-      context: ..
+      dockerfile: .maintain/Dockerfile.api
+    container_name: licensable-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # API configuration
+
+  substrate:
+    build:
       dockerfile: .maintain/Dockerfile
-    ports:
-      - "9933:9933"  # RPC HTTP
-      - "9944:9944"  # RPC WebSocket
-      - "30333:30333" # P2P
-      - "3000:3000"  # NestJS API
+    container_name: licensable-substrate
     depends_on:
       - postgres
-    environment:
-      - NODE_ENV=production
-      - DB_HOST=postgres
-      # ... other env vars
+      - api
+    # Substrate node configuration
 ```
+
+**Service Startup Order**:
+1. PostgreSQL starts first, waits for health check
+2. API starts when PostgreSQL is healthy
+3. Substrate node starts after both are running
 
 #### Omni-Node Setup (`docker-compose.omni-node.yml`)
 
-Similar structure but uses:
-- `Dockerfile.omni-node` for building
-- Additional volume for chain spec
-- Parachain-specific environment variables
+Two-service setup:
+- PostgreSQL database
+- Omni-node container (with API built-in using supervisor)
 
 ## Environment Variables
 
@@ -129,25 +221,236 @@ DB_NAME=license_db
 PORT=3000
 ```
 
-## Supervisor Configuration
+## Container Management
 
-Both Docker setups use Supervisor to manage processes. The configuration is embedded in the Dockerfiles:
+### Accessing Container Shells
 
-```ini
-[program:substrate]
-command=/usr/local/bin/solochain-template-node --dev --rpc-external --rpc-cors all
-autostart=true
-autorestart=true
-stderr_logfile=/var/log/supervisor/substrate.err.log
-stdout_logfile=/var/log/supervisor/substrate.log
+```bash
+# Substrate node container
+docker exec -it licensable-substrate bash
 
-[program:api]
-command=node /home/substrate/api/dist/main.js
-autostart=true
-autorestart=true
-environment=NODE_ENV=production,DB_HOST=postgres,...
-stderr_logfile=/var/log/supervisor/api.err.log
-stdout_logfile=/var/log/supervisor/api.log
+# API service container
+docker exec -it licensable-api sh
+
+# Omni-node container (if using omni setup)
+docker exec -it licensable-omni-node bash
+
+# PostgreSQL container
+docker exec -it licensable-postgres psql -U postgres -d license_db
+```
+
+### Viewing Logs
+
+```bash
+# All services
+docker-compose -f .maintain/docker-compose.yml logs -f
+
+# Specific service
+docker logs licensable-substrate -f
+docker logs licensable-api -f
+docker logs licensable-postgres -f
+
+# Last 50 lines
+docker logs licensable-substrate --tail 50
+
+# For omni-node (uses supervisor)
+docker exec -it licensable-omni-node tail -f /var/log/supervisor/substrate.log
+docker exec -it licensable-omni-node tail -f /var/log/supervisor/api.log
+```
+
+### Service Health Checks
+
+```bash
+# Check all containers
+docker-compose -f .maintain/docker-compose.yml ps
+
+# Check container health status
+docker ps --format "table {{.Names}}\t{{.Status}}"
+
+# Test endpoints
+curl http://localhost:9933                                      # Substrate RPC
+curl http://localhost:3000/health                               # API health
+curl "http://localhost:3000/license?key=valid-license-key-12345" # License validation
+```
+
+## Database Management
+
+### Seeding the Database
+
+```bash
+# Using pnpm script (recommended)
+pnpm docker:seed
+
+# Or manually
+docker exec -it licensable-api sh -c 'cd /app && node dist/seed.js'
+```
+
+This creates three test licenses:
+- `valid-license-key-12345` - Valid, expires in 30 days
+- `expired-license-key-67890` - Expired 30 days ago
+- `inactive-license-key-11111` - Valid date but inactive
+
+### Database Operations
+
+```bash
+# Connect to PostgreSQL
+docker exec -it licensable-postgres psql -U postgres -d license_db
+
+# Backup database
+docker exec licensable-postgres pg_dump -U postgres license_db > backup.sql
+
+# Restore database
+docker exec -i licensable-postgres psql -U postgres license_db < backup.sql
+
+# List databases
+docker exec -it licensable-postgres psql -U postgres -c "\l"
+
+# List tables
+docker exec -it licensable-postgres psql -U postgres -d license_db -c "\dt"
+```
+
+## Maintenance Tasks
+
+### Rebuilding After Code Changes
+
+```bash
+# Using the convenience script
+.maintain/start-local.sh --build
+
+# Or manually
+docker-compose -f .maintain/docker-compose.yml build
+docker-compose -f .maintain/docker-compose.yml up -d
+
+# Rebuild specific service
+docker-compose -f .maintain/docker-compose.yml build api
+docker-compose -f .maintain/docker-compose.yml build substrate
+docker-compose -f .maintain/docker-compose.yml up -d
+```
+
+### Updating Dependencies
+
+```bash
+# For Substrate node
+cargo update
+.maintain/start-local.sh --build
+
+# For API service
+cd api-service && pnpm update
+docker-compose -f .maintain/docker-compose.yml build api
+```
+
+### Clean Rebuild
+
+```bash
+# Stop and remove everything
+pnpm docker:clean
+
+# Rebuild from scratch
+.maintain/start-local.sh --build --clean
+
+# Or manually
+docker-compose -f .maintain/docker-compose.yml down -v
+docker-compose -f .maintain/docker-compose.yml build --no-cache
+docker-compose -f .maintain/docker-compose.yml up -d
+```
+
+## Troubleshooting Guide
+
+### Common Issues and Solutions
+
+#### 1. Port Conflicts
+
+**Problem**: `Bind for 0.0.0.0:XXXX failed: port is already allocated`
+
+**Solution**:
+```bash
+# Stop all containers from both setups
+docker-compose -f .maintain/docker-compose.yml down
+docker-compose -f .maintain/docker-compose.omni-node.yml down
+
+# Or modify port mappings in docker-compose.yml
+ports:
+  - "19933:9933"  # Change external port
+```
+
+#### 2. Database Connection Failed
+
+**Problem**: API can't connect to PostgreSQL
+
+**Solutions**:
+```bash
+# Check PostgreSQL is running
+docker ps | grep postgres
+
+# Check PostgreSQL health
+docker exec licensable-postgres pg_isready -U postgres
+
+# Check API logs
+docker logs licensable-api
+
+# Verify network connectivity
+docker network inspect maintain_licensable-network
+```
+
+#### 3. Substrate Node Not Starting
+
+**Problem**: Node crashes on startup or doesn't respond
+
+**Solutions**:
+```bash
+# Check logs
+docker logs licensable-substrate
+
+# For architecture issues (Apple Silicon)
+.maintain/start-local.sh --build  # Rebuild for ARM64
+
+# Check if binary is compatible
+docker exec -it licensable-substrate /usr/local/bin/solochain-template-node --version
+```
+
+#### 4. Rosetta/Architecture Issues (Apple Silicon)
+
+**Problem**: `rosetta error: failed to open elf`
+
+**Solutions**:
+```bash
+# Rebuild the image natively for ARM64
+.maintain/start-local.sh --build
+
+# Or try Omni-Node
+.maintain/start-local.sh --omni
+
+# Check your architecture
+uname -m  # Should show "arm64" on Apple Silicon
+```
+
+#### 5. Build Failures
+
+**Problem**: Docker build fails
+
+**Solutions**:
+```bash
+# Clear Docker cache
+docker system prune -a
+
+# Remove old images
+docker images | grep maintain | awk '{print $3}' | xargs docker rmi -f
+
+# Rebuild
+.maintain/start-local.sh --build --clean
+```
+
+#### 6. Image Not Found
+
+**Problem**: Script can't find Docker images
+
+**Solutions**:
+```bash
+# List available images
+docker images | grep maintain
+
+# Rebuild missing images
+.maintain/start-local.sh --build
 ```
 
 ## Chain Specification Template
@@ -161,123 +464,6 @@ The `parachain-spec-template.json` contains the base configuration for the parac
 - **Initial Accounts**: Alice and Bob with balances
 - **License Key**: Configured in genesis
 
-## Maintenance Tasks
-
-### Rebuilding After Code Changes
-
-```bash
-# For traditional node
-pnpm docker:build && pnpm docker:restart
-
-# For omni-node
-pnpm omni:docker:build && pnpm omni:docker:up
-```
-
-### Accessing Container Shells
-
-```bash
-# Traditional node container
-docker exec -it licensable-runtime bash
-
-# Omni-node container
-docker exec -it licensable-omni-node bash
-
-# PostgreSQL container
-docker exec -it licensable-postgres psql -U postgres
-```
-
-### Viewing Logs
-
-```bash
-# All services
-docker-compose -f .maintain/docker-compose.yml logs -f
-
-# Specific service
-docker-compose -f .maintain/docker-compose.yml logs -f licensable-runtime
-
-# Supervisor logs inside container
-docker exec -it licensable-runtime tail -f /var/log/supervisor/substrate.log
-docker exec -it licensable-runtime tail -f /var/log/supervisor/api.log
-```
-
-### Database Management
-
-```bash
-# Connect to PostgreSQL
-docker exec -it licensable-postgres psql -U postgres -d license_db
-
-# Backup database
-docker exec licensable-postgres pg_dump -U postgres license_db > backup.sql
-
-# Restore database
-docker exec -i licensable-postgres psql -U postgres license_db < backup.sql
-
-# Seed database with test data
-pnpm docker:seed
-```
-
-### Health Monitoring
-
-```bash
-# Check container health
-docker ps --format "table {{.Names}}\t{{.Status}}"
-
-# Check services inside container
-docker exec -it licensable-runtime supervisorctl status
-
-# Test endpoints
-curl http://localhost:9933  # Substrate RPC
-curl http://localhost:3000/health  # API health
-curl "http://localhost:3000/license?key=valid-license-key-12345"  # License validation
-```
-
-## Troubleshooting Guide
-
-### Common Issues and Solutions
-
-#### 1. Port Conflicts
-
-**Problem**: Ports already in use
-**Solution**: Modify port mappings in docker-compose.yml:
-```yaml
-ports:
-  - "19933:9933"  # Change external port
-  - "19944:9944"
-  - "13000:3000"
-```
-
-#### 2. Database Connection Failed
-
-**Problem**: API can't connect to PostgreSQL
-**Solutions**:
-1. Check PostgreSQL is running: `docker ps | grep postgres`
-2. Verify network connectivity: `docker network ls`
-3. Check environment variables in container: `docker exec licensable-runtime env | grep DB_`
-
-#### 3. Substrate Node Not Starting
-
-**Problem**: Node crashes on startup
-**Solutions**:
-1. Check logs: `docker exec -it licensable-runtime tail -f /var/log/supervisor/substrate.log`
-2. Verify chain spec is valid (for omni-node)
-3. Ensure WASM runtime is built correctly
-
-#### 4. Build Failures
-
-**Problem**: Docker build fails
-**Solutions**:
-1. Clear Docker cache: `docker system prune -a`
-2. Update Rust toolchain: Check rust-toolchain.toml
-3. Verify all dependencies in Cargo.toml
-
-#### 5. Supervisor Issues
-
-**Problem**: Services not managed properly
-**Solutions**:
-1. Check supervisor status: `docker exec -it licensable-runtime supervisorctl status`
-2. Restart specific service: `docker exec -it licensable-runtime supervisorctl restart substrate`
-3. Reload configuration: `docker exec -it licensable-runtime supervisorctl reload`
-
 ## Performance Optimization
 
 ### Resource Limits
@@ -286,7 +472,7 @@ Add resource limits to docker-compose.yml for production:
 
 ```yaml
 services:
-  licensable-runtime:
+  substrate:
     deploy:
       resources:
         limits:
@@ -297,43 +483,33 @@ services:
           memory: 2G
 ```
 
-### Volume Optimization
-
-Use named volumes for better performance:
-
-```yaml
-volumes:
-  substrate_data:
-    driver: local
-  api_data:
-    driver: local
-  postgres_data:
-    driver: local
-```
-
 ### Build Cache
 
 Optimize build times using Docker BuildKit:
 
 ```bash
 export DOCKER_BUILDKIT=1
-docker-compose build
+docker-compose -f .maintain/docker-compose.yml build
 ```
 
 ## Security Considerations
 
-### Production Deployment
+### Production Deployment Checklist
 
-1. **Remove --dev flag** from substrate node command
-2. **Use secure passwords** for PostgreSQL
-3. **Implement SSL/TLS** with reverse proxy
-4. **Restrict RPC methods** (remove `--rpc-methods unsafe`)
-5. **Use specific image tags** instead of `latest`
-6. **Run containers as non-root user** (already configured)
+- [ ] Remove `--dev` flag from Substrate node command
+- [ ] Use secure passwords for PostgreSQL
+- [ ] Implement SSL/TLS with reverse proxy
+- [ ] Restrict RPC methods (remove `--rpc-methods unsafe`)
+- [ ] Use specific image tags instead of `latest`
+- [ ] Run containers as non-root user (already configured)
+- [ ] Set up proper network isolation
+- [ ] Enable Docker content trust
+- [ ] Implement secrets management
+- [ ] Set up monitoring and logging
 
 ### Environment Variables
 
-Never commit sensitive data. Use Docker secrets or external secret management:
+Never commit sensitive data. Use Docker secrets:
 
 ```yaml
 secrets:
@@ -346,130 +522,60 @@ services:
       - db_password
 ```
 
-### Network Isolation
-
-Create custom networks for service isolation:
-
-```yaml
-networks:
-  backend:
-    driver: bridge
-    internal: true
-  frontend:
-    driver: bridge
-```
-
-## Backup and Recovery
-
-### Automated Backups
-
-Create a backup service in docker-compose:
-
-```yaml
-services:
-  backup:
-    image: postgres:14
-    command: |
-      sh -c 'while true; do
-        pg_dump -h postgres -U postgres license_db > /backups/backup_$$(date +%Y%m%d_%H%M%S).sql
-        sleep 86400
-      done'
-    volumes:
-      - ./backups:/backups
-    depends_on:
-      - postgres
-```
-
-### Manual Recovery Process
-
-1. Stop services: `pnpm docker:down`
-2. Restore database: `docker-compose run --rm postgres psql -U postgres -d license_db < backup.sql`
-3. Start services: `pnpm docker:up`
-
-## Monitoring and Logging
-
-### Log Aggregation
-
-For production, consider using log aggregation:
-
-```yaml
-services:
-  licensable-runtime:
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-```
-
-### Metrics Collection
-
-Add Prometheus metrics:
-
-```yaml
-services:
-  prometheus:
-    image: prom/prometheus
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-```
-
-## CI/CD Integration
-
-### GitHub Actions Example
-
-```yaml
-name: Docker Build
-on:
-  push:
-    branches: [main]
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Build Docker image
-        run: |
-          docker build -f .maintain/Dockerfile -t licensable-runtime:${{ github.sha }} .
-      - name: Push to registry
-        run: |
-          docker push licensable-runtime:${{ github.sha }}
-```
-
 ## Migration Guides
+
+### From Monolithic to Microservices
+
+The project was refactored from a monolithic container (using supervisor) to a microservices architecture:
+
+**Old Architecture** (Before):
+- Single container running both Substrate node and API
+- Supervisor managing processes
+- Container name: `licensable-runtime`
+
+**New Architecture** (After):
+- Three separate containers
+- No supervisor needed (except omni-node)
+- Container names: `licensable-substrate`, `licensable-api`, `licensable-postgres`
+
+**Migration Steps**:
+1. Stop old setup: `docker stop licensable-runtime && docker rm licensable-runtime`
+2. Rebuild with new architecture: `.maintain/start-local.sh --build`
+3. Update any scripts using old container names
 
 ### From Traditional to Omni-Node
 
 1. Build runtime WASM: `pnpm omni:build`
-2. Update docker-compose to use omni-node setup
+2. Start omni-node setup: `.maintain/start-local.sh --omni`
 3. Generate chain spec with Para ID
-4. Update environment variables
-5. Deploy with `pnpm omni:docker`
-
-### Version Upgrades
-
-1. Update Rust toolchain in rust-toolchain.toml
-2. Update Node.js version in Dockerfile
-3. Test locally: `pnpm docker:build`
-4. Deploy: `pnpm docker:up`
+4. Update environment variables if needed
 
 ## File Locations Reference
 
-- **Dockerfiles**: `.maintain/Dockerfile`, `.maintain/Dockerfile.omni-node`
-- **Docker Compose**: `.maintain/docker-compose.yml`, `.maintain/docker-compose.omni-node.yml`
+- **Substrate Dockerfile**: `.maintain/Dockerfile`
+- **API Dockerfile**: `.maintain/Dockerfile.api`
+- **Omni-Node Dockerfile**: `.maintain/Dockerfile.omni-node`
+- **Traditional Compose**: `.maintain/docker-compose.yml`
+- **Omni-Node Compose**: `.maintain/docker-compose.omni-node.yml`
 - **Environment Config**: `.maintain/.env.docker`
 - **Chain Spec Template**: `.maintain/parachain-spec-template.json`
+- **Architecture Docs**: `.maintain/DOCKER-ARCHITECTURE.md`
+- **Startup Script**: `.maintain/start-local.sh`
 - **Main Documentation**: `../README.md`
+- **Testing Guide**: `../GUIDE.md`
+
+## Additional Resources
+
+- [DOCKER-ARCHITECTURE.md](./DOCKER-ARCHITECTURE.md) - Detailed architecture documentation
+- [GUIDE.md](../GUIDE.md) - Comprehensive testing guide
+- [README.md](../README.md) - Main project documentation
 
 ## Support
 
-For detailed documentation on specific components, refer to the main [README.md](../README.md).
-
 For issues:
-1. Check container logs
-2. Verify service health
-3. Review environment variables
-4. Check network connectivity
+1. Check container logs: `docker logs <container-name>`
+2. Verify service health: `docker-compose ps`
+3. Review environment variables: `docker exec <container> env`
+4. Check network connectivity: `docker network inspect maintain_licensable-network`
 5. Consult troubleshooting guide above
+6. Review [GUIDE.md](../GUIDE.md) for testing procedures
