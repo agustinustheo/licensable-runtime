@@ -46,6 +46,7 @@ default_constructed_unit_structs = { level = "allow", priority = 2 } # stylistic
 licensable-parachain-runtime = { path = "./runtime", default-features = false }
 lite-json = { version = "0.2.0", default-features = false }
 log = { version = "0.4.21", default-features = false }
+serde = { version = "1.0.213", features = ["derive"] }
 
 clap = { version = "4.5.3" }
 frame-benchmarking-cli = { git = "https://github.com/moonbeam-foundation/polkadot-sdk", branch = "moonbeam-polkadot-stable2407", default-features = false }

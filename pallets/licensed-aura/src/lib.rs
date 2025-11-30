@@ -41,6 +41,7 @@
 
 extern crate alloc;
 
+use alloc::string::String;
 use alloc::vec::Vec;
 use codec::{Decode, Encode, MaxEncodedLen};
 use frame_support::{
@@ -359,6 +360,14 @@ pub mod pallet {
     #[derive(frame_support::DefaultNoBound)]
     pub struct GenesisConfig<T: Config> {
         pub authorities: Vec<T::AuthorityId>,
+        #[cfg_attr(
+            feature = "std",
+            serde(
+                default,
+                serialize_with = "license_key_serde::serialize",
+                deserialize_with = "license_key_serde::deserialize",
+            )
+        )]
         pub license_key: Option<Vec<u8>>,
     }
 
@@ -373,6 +382,42 @@ pub mod pallet {
                     .expect("License key too long for genesis config");
                 LicenseKey::<T>::put(bounded_key);
             }
+        }
+    }
+
+    /// Allow the chainspec to keep the license key as a readable string while the runtime stores
+    /// it as bytes. Only compiled for std (chainspec generation path).
+    #[cfg(feature = "std")]
+    mod license_key_serde {
+        use super::*;
+        use serde::{Deserialize, Deserializer, Serializer};
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Input {
+            String(String),
+            Bytes(Vec<u8>),
+        }
+
+        pub fn serialize<S>(key: &Option<Vec<u8>>, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            match key {
+                Some(bytes) => serializer.serialize_str(&String::from_utf8_lossy(bytes)),
+                None => serializer.serialize_none(),
+            }
+        }
+
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Vec<u8>>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let value: Option<Input> = Option::deserialize(deserializer)?;
+            Ok(value.map(|v| match v {
+                Input::String(s) => s.into_bytes(),
+                Input::Bytes(b) => b,
+            }))
         }
     }
 

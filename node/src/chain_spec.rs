@@ -118,7 +118,8 @@ fn testnet_genesis(
         },
         "licensedAura": {
             "authorities": initial_authorities.iter().map(|x| (x.0.clone())).collect::<Vec<_>>(),
-            "licenseKey": "valid-license-key-12345".as_bytes().to_vec(),
+            // Keep license key as a string so it is human readable in the JSON chainspec.
+            "licenseKey": "valid-license-key-12345",
         },
     })
 }
