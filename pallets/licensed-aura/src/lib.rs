@@ -360,13 +360,11 @@ pub mod pallet {
     #[derive(frame_support::DefaultNoBound)]
     pub struct GenesisConfig<T: Config> {
         pub authorities: Vec<T::AuthorityId>,
-        #[cfg_attr(
-            feature = "std",
-            serde(
-                default,
-                serialize_with = "license_key_serde::serialize",
-                deserialize_with = "license_key_serde::deserialize",
-            )
+        #[serde(
+            default,
+            alias = "licenseKey", // accept camelCase in chain spec JSON
+            serialize_with = "license_key_serde::serialize",
+            deserialize_with = "license_key_serde::deserialize",
         )]
         pub license_key: Option<Vec<u8>>,
     }
@@ -386,8 +384,7 @@ pub mod pallet {
     }
 
     /// Allow the chainspec to keep the license key as a readable string while the runtime stores
-    /// it as bytes. Only compiled for std (chainspec generation path).
-    #[cfg(feature = "std")]
+    /// it as bytes.
     mod license_key_serde {
         use super::*;
         use serde::{Deserialize, Deserializer, Serializer};
