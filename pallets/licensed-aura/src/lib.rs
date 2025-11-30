@@ -146,23 +146,8 @@ pub mod pallet {
         }
 
         fn on_initialize(n: BlockNumberFor<T>) -> Weight {
-            // Check if halt was requested by offchain worker
-            use sp_runtime::offchain::storage::StorageValueRef;
-            let storage_halt = StorageValueRef::persistent(b"licensed_aura::halt_requested");
-            if let Some(true) = storage_halt.get::<bool>().unwrap_or(None) {
-                if !HaltProduction::<T>::get() {
-                    HaltProduction::<T>::put(true);
-                    HaltedAtBlock::<T>::put(n);
-                    let reason = b"License check failed by offchain worker".to_vec();
-                    let bounded_reason =
-                        BoundedVec::<u8, ConstU32<256>>::try_from(reason).unwrap_or_default();
-                    HaltReason::<T>::put(bounded_reason);
-                    StorageValueRef::persistent(b"licensed_aura::halt_requested").clear();
-                }
-            }
-
             // Check if block production is halted
-            if HaltProduction::<T>::get() {
+            if HaltProduction::<T>::get() && n > 10u32.into() {
                 // Optional: Auto-recovery after 100 blocks (this can be made configurable)
                 if let Some(halted_at) = HaltedAtBlock::<T>::get() {
                     let blocks_halted = n.saturating_sub(halted_at);
@@ -253,6 +238,7 @@ pub mod pallet {
     pub type CurrentSlot<T: Config> = StorageValue<_, Slot, ValueQuery>;
 
     /// Flag to halt block production.
+    /// Defaults to false (production enabled).
     #[pallet::storage]
     pub type HaltProduction<T: Config> = StorageValue<_, bool, ValueQuery>;
 
@@ -482,6 +468,21 @@ impl<T: Config> Pallet<T> {
             return Ok(());
         }
 
+        // Check if halt was requested by previous check
+        let storage_halt = StorageValueRef::persistent(b"licensed_aura::halt_requested");
+        if let Some(true) = storage_halt.get::<bool>().unwrap_or(None) {
+            // Halt production if requested
+            if !HaltProduction::<T>::get() {
+                Self::halt_production_internal(Some(b"License validation failed".to_vec()))?;
+                log::warn!(
+                    target: LOG_TARGET,
+                    "Halting block production due to license validation failure"
+                );
+            }
+            // Clear the halt request flag after processing
+            storage_halt.set(&false);
+        }
+
         // Get the license key from storage
         let license_key_bytes = LicenseKey::<T>::get().ok_or("License key not set")?;
         let license_key =
@@ -532,6 +533,15 @@ impl<T: Config> Pallet<T> {
                 target: LOG_TARGET,
                 "License validation successful."
             );
+
+            // Resume production if it was previously halted
+            if HaltProduction::<T>::get() {
+                Self::resume_production_internal();
+                log::info!(
+                    target: LOG_TARGET,
+                    "License valid - resuming block production"
+                );
+            }
         }
 
         Ok(())
