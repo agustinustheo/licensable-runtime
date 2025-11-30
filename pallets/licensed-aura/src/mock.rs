@@ -81,6 +81,19 @@ impl DisabledValidators for MockDisabledValidators {
     }
 }
 
+impl frame_system::offchain::SigningTypes for Test {
+    type Public = sp_runtime::testing::UintAuthorityId;
+    type Signature = sp_runtime::testing::TestSignature;
+}
+
+impl<LocalCall> frame_system::offchain::SendTransactionTypes<LocalCall> for Test
+where
+    RuntimeCall: From<LocalCall>,
+{
+    type Extrinsic = sp_runtime::testing::TestXt<RuntimeCall, ()>;
+    type OverarchingCall = RuntimeCall;
+}
+
 impl pallet_aura::Config for Test {
     type AuthorityId = AuthorityId;
     type DisabledValidators = MockDisabledValidators;

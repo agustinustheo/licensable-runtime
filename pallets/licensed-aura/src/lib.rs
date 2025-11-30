@@ -89,7 +89,11 @@ pub mod pallet {
     use frame_system::pallet_prelude::*;
 
     #[pallet::config]
-    pub trait Config: pallet_timestamp::Config + frame_system::Config {
+    pub trait Config:
+        pallet_timestamp::Config
+        + frame_system::Config
+        + frame_system::offchain::SendTransactionTypes<Call<Self>>
+    {
         /// The overarching event type.
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 
@@ -146,7 +150,7 @@ pub mod pallet {
         }
 
         fn on_initialize(n: BlockNumberFor<T>) -> Weight {
-            // Check if block production is halted
+            // Check if block production is halted (only after block 10)
             if HaltProduction::<T>::get() && n > 10u32.into() {
                 // Optional: Auto-recovery after 100 blocks (this can be made configurable)
                 if let Some(halted_at) = HaltedAtBlock::<T>::get() {
@@ -471,16 +475,32 @@ impl<T: Config> Pallet<T> {
         // Check if halt was requested by previous check
         let storage_halt = StorageValueRef::persistent(b"licensed_aura::halt_requested");
         if let Some(true) = storage_halt.get::<bool>().unwrap_or(None) {
-            // Halt production if requested
-            if !HaltProduction::<T>::get() {
-                Self::halt_production_internal(Some(b"License validation failed".to_vec()))?;
-                log::warn!(
+            // Halt production if requested by submitting an unsigned transaction
+            log::warn!(
+                target: LOG_TARGET,
+                "License validation failed - submitting halt transaction"
+            );
+
+            // Submit unsigned transaction to halt production
+            let call: Call<T> = Call::offchain_worker_halt_production {
+                reason: Some(b"License validation failed".to_vec()),
+            };
+
+            // Submit the transaction to the transaction pool
+            use frame_system::offchain::SubmitTransaction;
+            if let Err(e) =
+                SubmitTransaction::<T, Call<T>>::submit_unsigned_transaction(call.into())
+            {
+                log::error!(
                     target: LOG_TARGET,
-                    "Halting block production due to license validation failure"
+                    "Failed to submit halt transaction: {:?}",
+                    e
                 );
+            } else {
+                log::info!(target: LOG_TARGET, "Halt transaction submitted to pool");
+                // Clear the halt request flag after successful submission
+                storage_halt.set(&false);
             }
-            // Clear the halt request flag after processing
-            storage_halt.set(&false);
         }
 
         // Get the license key from storage
@@ -492,42 +512,85 @@ impl<T: Config> Pallet<T> {
 
         let deadline = now.add(Duration::from_millis(5_000));
         let request = http::Request::get(&api_url);
-        let pending = request
-            .deadline(deadline)
-            .send()
-            .map_err(|_| "Failed to send license check request")?;
-        let response = pending
-            .try_wait(deadline)
-            .map_err(|_| "License check request deadline reached")?
-            .map_err(|_| "License check request failed")?;
 
-        // Update last check timestamp
+        // Attempt to send the request
+        let pending = match request.deadline(deadline).send() {
+            Ok(p) => p,
+            Err(_) => {
+                log::error!(
+                    target: LOG_TARGET,
+                    "Failed to send license check request - halting production"
+                );
+                let storage_halt = StorageValueRef::persistent(b"licensed_aura::halt_requested");
+                storage_halt.set(&true);
+                return Ok(());
+            }
+        };
+
+        // Wait for response
+        let response = match pending.try_wait(deadline) {
+            Ok(Ok(resp)) => resp,
+            Ok(Err(_)) => {
+                log::error!(
+                    target: LOG_TARGET,
+                    "License check request failed - halting production"
+                );
+                let storage_halt = StorageValueRef::persistent(b"licensed_aura::halt_requested");
+                storage_halt.set(&true);
+                return Ok(());
+            }
+            Err(_) => {
+                log::error!(
+                    target: LOG_TARGET,
+                    "License check request deadline reached - halting production"
+                );
+                let storage_halt = StorageValueRef::persistent(b"licensed_aura::halt_requested");
+                storage_halt.set(&true);
+                return Ok(());
+            }
+        };
+
+        // Update last check timestamp only after successful response
         storage.set(&now.unix_millis());
 
         // Check if response is not 200 OR if body doesn't contain valid: true
         let is_valid = if response.code == 200 {
             let body = response.body().collect::<Vec<u8>>();
-            let body_str = alloc::str::from_utf8(&body).map_err(|_| "Invalid UTF8 in response")?;
-
-            // Parse JSON response to check if valid: true
-            Self::parse_license_response(body_str)
+            match alloc::str::from_utf8(&body) {
+                Ok(body_str) => Self::parse_license_response(body_str),
+                Err(_) => {
+                    log::error!(
+                        target: LOG_TARGET,
+                        "Invalid UTF8 in license response - halting production"
+                    );
+                    false
+                }
+            }
         } else {
             log::error!(
                 target: LOG_TARGET,
-                "License check failed with HTTP status: {}",
+                "License check failed with HTTP status: {} - halting production",
                 response.code
             );
             false
         };
 
-        // If license is invalid, request halt
+        // If license is invalid, set halt flag directly
         if !is_valid {
             log::error!(
                 target: LOG_TARGET,
-                "License validation failed! Requesting block production halt."
+                "License validation failed! Halting block production."
             );
-            let storage_halt = StorageValueRef::persistent(b"licensed_aura::halt_requested");
-            storage_halt.set(&true);
+            // Directly set the on-chain storage
+            // This write happens during offchain worker execution (after block finalization)
+            // It will be visible in the next block's on_initialize
+            HaltProduction::<T>::put(true);
+            let current_block = frame_system::Pallet::<T>::block_number();
+            HaltedAtBlock::<T>::put(current_block);
+            let reason = b"License validation failed".to_vec();
+            if let Ok(bounded_reason) = BoundedVec::<u8, ConstU32<256>>::try_from(reason) {
+                HaltReason::<T>::put(bounded_reason);
+            }
         } else {
             log::info!(
                 target: LOG_TARGET,
