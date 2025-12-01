@@ -25,7 +25,10 @@
     "docker:restart": "docker-compose -f .maintain/docker-compose.yml restart",
     "docker:clean": "docker-compose -f .maintain/docker-compose.yml down -v",
     "docker:seed": "docker exec -it licensable-api sh -c 'cd /app && DB_HOST=postgres DB_PORT=5432 DB_USERNAME=postgres DB_PASSWORD=postgres DB_NAME=license_db node dist/seed.js'",
-    "docker": "pnpm docker:up && pnpm docker:logs"
+    "docker": "pnpm docker:up && pnpm docker:logs",
+    "omni:start": "pnpm omni:generate && pnpm omni:run",
+    "omni:generate": ".maintain/update-chain-spec-code.sh",
+    "omni:run": "polkadot-omni-node --chain .maintain/chain-spec.json --dev"
   },
   "keywords": [
     "substrate",

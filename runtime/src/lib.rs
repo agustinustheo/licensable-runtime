@@ -161,6 +161,30 @@ use log::{error, warn};
 
 pub struct AuraHaltFilter;
 
+impl AuraHaltFilter {
+    // Helper: what is allowed *while halted*?
+    fn allowed_while_halted(call: &RuntimeCall) -> bool {
+        match call {
+            // Direct calls to the licensed aura pallet.
+            RuntimeCall::Aura(pallet_licensed_aura::Call::sudo_resume_production { .. }) => true,
+
+            RuntimeCall::Aura(pallet_licensed_aura::Call::offchain_worker_halt_production {
+                ..
+            }) => true,
+
+            // Sudo wrapping an allowed call: sudo(Aura::sudo_resume_production { .. })
+            RuntimeCall::Sudo(pallet_sudo::Call::sudo { call })
+            | RuntimeCall::Sudo(pallet_sudo::Call::sudo_unchecked_weight { call, .. }) => {
+                // Look at the inner RuntimeCall.
+                Self::allowed_while_halted(call)
+            }
+
+            // Everything else is NOT allowed while halted.
+            _ => false,
+        }
+    }
+}
+
 impl Contains<RuntimeCall> for AuraHaltFilter {
     fn contains(call: &RuntimeCall) -> bool {
         // Always allow mandatory inherents (like timestamp).
@@ -178,31 +202,23 @@ impl Contains<RuntimeCall> for AuraHaltFilter {
         if halted {
             const LOG_TARGET: &str = "licensed-aura";
 
-            warn!(
-                target: LOG_TARGET,
-                "❗️ Licensed Aura is halted. Please renew your license."
-            );
-            error!(
-                "❌️ Licensed Aura is halted. Extrinsic {:?} cannot be processed.",
-                call
-            );
-
-            match call {
-                // Allow sudo to resume while halted.
-                RuntimeCall::Aura(pallet_licensed_aura::Call::sudo_resume_production {
-                    ..
-                }) => true,
-
-                // Allow OCW halt extrinsic while halted (idempotent/logging).
-                RuntimeCall::Aura(
-                    pallet_licensed_aura::Call::offchain_worker_halt_production { .. },
-                ) => true,
-
-                // Block everything else while HaltProduction == true.
-                _ => false,
+            // Only log when we’re actually *blocking* something, not for allowed ones.
+            if !Self::allowed_while_halted(call) {
+                warn!(
+                    target: LOG_TARGET,
+                    "❗️ Licensed Aura is halted. Please renew your license."
+                );
+                error!(
+                    target: LOG_TARGET,
+                    "❌️ Licensed Aura is halted. Extrinsic {:?} cannot be processed.",
+                    call
+                );
             }
+
+            // Only allow the whitelisted calls while halted.
+            Self::allowed_while_halted(call)
         } else {
-            // Normal mode: allow all calls.
+            // Normal mode: allow everything.
             true
         }
     }
