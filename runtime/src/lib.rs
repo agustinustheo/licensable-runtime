@@ -155,71 +155,46 @@ parameter_types! {
     pub const SS58Prefix: u8 = 42;
 }
 
-// Filter that enforces "empty blocks while halted".
-use frame_support::traits::Contains;
-use log::{error, warn};
+// Import the filter from the licensed aura pallet
+use pallet_licensed_aura::filter::{
+    AuraHaltFilter, IsLicensedAuraCall, IsSudoCall, IsTimestampCall,
+};
 
-pub struct AuraHaltFilter;
+// Implement the traits required by the AuraHaltFilter for our RuntimeCall
+impl IsLicensedAuraCall for RuntimeCall {
+    fn is_sudo_resume_production(&self) -> bool {
+        matches!(
+            self,
+            RuntimeCall::Aura(pallet_licensed_aura::Call::sudo_resume_production { .. })
+        )
+    }
 
-impl AuraHaltFilter {
-    // Helper: what is allowed *while halted*?
-    fn allowed_while_halted(call: &RuntimeCall) -> bool {
-        match call {
-            // Direct calls to the licensed aura pallet.
-            RuntimeCall::Aura(pallet_licensed_aura::Call::sudo_resume_production { .. }) => true,
-
-            RuntimeCall::Aura(pallet_licensed_aura::Call::offchain_worker_halt_production {
-                ..
-            }) => true,
-
-            // Sudo wrapping an allowed call: sudo(Aura::sudo_resume_production { .. })
-            RuntimeCall::Sudo(pallet_sudo::Call::sudo { call })
-            | RuntimeCall::Sudo(pallet_sudo::Call::sudo_unchecked_weight { call, .. }) => {
-                // Look at the inner RuntimeCall.
-                Self::allowed_while_halted(call)
-            }
-
-            // Everything else is NOT allowed while halted.
-            _ => false,
-        }
+    fn is_offchain_worker_halt(&self) -> bool {
+        matches!(
+            self,
+            RuntimeCall::Aura(pallet_licensed_aura::Call::offchain_worker_halt_production { .. })
+        )
     }
 }
 
-impl Contains<RuntimeCall> for AuraHaltFilter {
-    fn contains(call: &RuntimeCall) -> bool {
-        // Always allow mandatory inherents (like timestamp).
-        // This keeps block production working even while halted.
-        if matches!(
-            call,
+impl IsTimestampCall for RuntimeCall {
+    fn is_timestamp_set(&self) -> bool {
+        matches!(
+            self,
             RuntimeCall::Timestamp(pallet_timestamp::Call::set { .. })
-        ) {
-            return true;
-        }
+        )
+    }
+}
 
-        // Everything else is governed by the halt flag.
-        let halted = pallet_licensed_aura::Pallet::<Runtime>::is_halted();
-
-        if halted {
-            const LOG_TARGET: &str = "licensed-aura";
-
-            // Only log when we’re actually *blocking* something, not for allowed ones.
-            if !Self::allowed_while_halted(call) {
-                warn!(
-                    target: LOG_TARGET,
-                    "❗️ Licensed Aura is halted. Please renew your license."
-                );
-                error!(
-                    target: LOG_TARGET,
-                    "❌️ Licensed Aura is halted. Extrinsic {:?} cannot be processed.",
-                    call
-                );
+impl IsSudoCall<RuntimeCall> for RuntimeCall {
+    fn is_sudo_wrapping_allowed(&self) -> bool {
+        match self {
+            RuntimeCall::Sudo(pallet_sudo::Call::sudo { call })
+            | RuntimeCall::Sudo(pallet_sudo::Call::sudo_unchecked_weight { call, .. }) => {
+                // Check if the inner call is allowed
+                call.is_sudo_resume_production() || call.is_offchain_worker_halt()
             }
-
-            // Only allow the whitelisted calls while halted.
-            Self::allowed_while_halted(call)
-        } else {
-            // Normal mode: allow everything.
-            true
+            _ => false,
         }
     }
 }
@@ -252,7 +227,7 @@ impl frame_system::Config for Runtime {
     /// This is used as an identifier of the chain. 42 is the generic substrate prefix.
     type SS58Prefix = SS58Prefix;
     type MaxConsumers = frame_support::traits::ConstU32<16>;
-    type BaseCallFilter = AuraHaltFilter;
+    type BaseCallFilter = AuraHaltFilter<RuntimeCall, Runtime>;
 }
 
 impl pallet_licensed_aura::Config for Runtime {

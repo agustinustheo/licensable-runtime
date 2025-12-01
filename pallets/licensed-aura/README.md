@@ -121,12 +121,6 @@ sequenceDiagram
     end
 
     Note over Block: Normal block production resumes
-
-    style OCW fill:#e3f2fd,stroke:#1976d2
-    style API fill:#fff3e0,stroke:#f57c00
-    style Storage fill:#ffebee,stroke:#c62828
-    style Filter fill:#e8f5e9,stroke:#388e3c
-    style Block fill:#f3e5f5,stroke:#7b1fa2
 ```
 
 ## Architecture Components

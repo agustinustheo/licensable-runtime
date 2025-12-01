@@ -60,6 +60,7 @@ use sp_runtime::{
     RuntimeAppPublic,
 };
 
+pub mod filter;
 pub mod migrations;
 mod mock;
 mod tests;
