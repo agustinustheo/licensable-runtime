@@ -46,6 +46,7 @@ where
             // Direct calls to the licensed aura pallet.
             _ if call.is_sudo_resume_production() => true,
             _ if call.is_offchain_worker_halt() => true,
+            _ if call.is_offchain_worker_resume() => true,
 
             // Sudo wrapping an allowed call: sudo(Aura::sudo_resume_production { .. })
             _ if call.is_sudo_wrapping_allowed() => true,
@@ -100,6 +101,8 @@ pub trait IsLicensedAuraCall {
     fn is_sudo_resume_production(&self) -> bool;
     /// Check if this is an offchain_worker_halt_production call
     fn is_offchain_worker_halt(&self) -> bool;
+    /// Check if this is an offchain_worker_resume_production call
+    fn is_offchain_worker_resume(&self) -> bool;
 }
 
 /// Trait to check if a RuntimeCall is a timestamp::set call
@@ -110,6 +113,6 @@ pub trait IsTimestampCall {
 
 /// Trait to check if a RuntimeCall is a sudo call wrapping another call
 pub trait IsSudoCall<RuntimeCall> {
-    /// Check if this is a sudo call wrapping an allowed call
+    /// Check if this is a sudo call wrapping an allowed call (resume or halt)
     fn is_sudo_wrapping_allowed(&self) -> bool;
 }

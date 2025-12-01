@@ -162,6 +162,7 @@ use pallet_licensed_aura::filter::{
 
 // Implement the traits required by the AuraHaltFilter for our RuntimeCall
 impl IsLicensedAuraCall for RuntimeCall {
+    // You can add more calls to the licensed aura pallet here if needed.
     fn is_sudo_resume_production(&self) -> bool {
         matches!(
             self,
@@ -169,15 +170,25 @@ impl IsLicensedAuraCall for RuntimeCall {
         )
     }
 
+    // You can add more calls to the licensed aura pallet here if needed.
     fn is_offchain_worker_halt(&self) -> bool {
         matches!(
             self,
             RuntimeCall::Aura(pallet_licensed_aura::Call::offchain_worker_halt_production { .. })
         )
     }
+
+    // You can add more calls to the licensed aura pallet here if needed.
+    fn is_offchain_worker_resume(&self) -> bool {
+        matches!(
+            self,
+            RuntimeCall::Aura(pallet_licensed_aura::Call::offchain_worker_resume_production { .. })
+        )
+    }
 }
 
 impl IsTimestampCall for RuntimeCall {
+    // You can add more calls to the timestamp pallet here if needed.
     fn is_timestamp_set(&self) -> bool {
         matches!(
             self,
@@ -191,8 +202,10 @@ impl IsSudoCall<RuntimeCall> for RuntimeCall {
         match self {
             RuntimeCall::Sudo(pallet_sudo::Call::sudo { call })
             | RuntimeCall::Sudo(pallet_sudo::Call::sudo_unchecked_weight { call, .. }) => {
-                // Check if the inner call is allowed
-                call.is_sudo_resume_production() || call.is_offchain_worker_halt()
+                // Check if the inner call is allowed (resume or halt)
+                call.is_sudo_resume_production()
+                    || call.is_offchain_worker_halt()
+                    || call.is_offchain_worker_resume()
             }
             _ => false,
         }

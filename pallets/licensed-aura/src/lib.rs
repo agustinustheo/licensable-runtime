@@ -291,6 +291,18 @@ pub mod pallet {
             log::info!(target: LOG_TARGET, "License key updated");
             Ok(())
         }
+
+        /// Resume production from offchain worker (unsigned transaction).
+        ///
+        /// This is emitted by the OCW when license validation succeeds and the chain is currently halted.
+        #[pallet::call_index(4)]
+        #[pallet::weight(T::DbWeight::get().writes(2))]
+        pub fn offchain_worker_resume_production(origin: OriginFor<T>) -> DispatchResult {
+            ensure_none(origin)?;
+            Self::resume_production_internal();
+            Self::deposit_event(Event::ProductionResumed);
+            Ok(())
+        }
     }
 
     #[pallet::genesis_config]
@@ -367,6 +379,15 @@ pub mod pallet {
                         .propagate(true)
                         .build()
                 }
+                Call::offchain_worker_resume_production { .. } => {
+                    // Allow at most one resume tx per block.
+                    ValidTransaction::with_tag_prefix("AuraResume")
+                        .priority(u64::MAX)
+                        .and_provides("resume_production")
+                        .longevity(1)
+                        .propagate(true)
+                        .build()
+                }
                 _ => InvalidTransaction::Call.into(),
             }
         }
@@ -400,7 +421,7 @@ impl<T: Config> Pallet<T> {
         HaltProduction::<T>::get()
     }
 
-    /// Offchain worker: check license and, if invalid, request a halt via unsigned tx.
+    /// Offchain worker: check license and submit halt/resume unsigned tx as needed.
     fn check_license_and_halt_if_needed() -> Result<(), &'static str> {
         use sp_runtime::offchain::{http, storage::StorageValueRef, Duration};
 
@@ -413,8 +434,11 @@ impl<T: Config> Pallet<T> {
             return Ok(());
         }
 
-        // 2) If a previous check already requested halting, try to submit the unsigned tx.
+        // 2) Check if we have a pending action from a previous check
         let storage_halt = StorageValueRef::persistent(b"licensed_aura::halt_requested");
+        let storage_resume = StorageValueRef::persistent(b"licensed_aura::resume_requested");
+
+        // If a previous check requested halting, try to submit the halt tx.
         if let Some(true) = storage_halt.get::<bool>().unwrap_or(None) {
             log::warn!(
                 target: LOG_TARGET,
@@ -438,6 +462,32 @@ impl<T: Config> Pallet<T> {
                 log::info!(target: LOG_TARGET, "Halt unsigned tx submitted");
                 storage_halt.set(&false);
             }
+            return Ok(());
+        }
+
+        // If a previous check requested resuming, try to submit the resume tx.
+        if let Some(true) = storage_resume.get::<bool>().unwrap_or(None) {
+            log::info!(
+                target: LOG_TARGET,
+                "License valid previously: submitting resume tx from OCW"
+            );
+
+            let call: Call<T> = Call::offchain_worker_resume_production {};
+
+            use frame_system::offchain::SubmitTransaction;
+            if let Err(e) =
+                SubmitTransaction::<T, Call<T>>::submit_unsigned_transaction(call.into())
+            {
+                log::error!(
+                    target: LOG_TARGET,
+                    "Failed to submit resume unsigned tx: {:?}",
+                    e
+                );
+            } else {
+                log::info!(target: LOG_TARGET, "Resume unsigned tx submitted");
+                storage_resume.set(&false);
+            }
+            return Ok(());
         }
 
         // 3) Read license key from on-chain storage
@@ -481,14 +531,29 @@ impl<T: Config> Pallet<T> {
             false
         };
 
-        if !is_valid {
+        // 4) Determine action based on license validity and current halt state
+        let currently_halted = Self::is_halted();
+
+        if !is_valid && !currently_halted {
+            // License is invalid and we're not halted yet -> request halt
             log::error!(
                 target: LOG_TARGET,
                 "License validation failed; will request halt via unsigned tx"
             );
             storage_halt.set(&true);
-        } else {
+        } else if is_valid && currently_halted {
+            // License is valid and we're currently halted -> request resume
+            log::info!(
+                target: LOG_TARGET,
+                "License validation successful and chain is halted; will request resume via unsigned tx"
+            );
+            storage_resume.set(&true);
+        } else if is_valid && !currently_halted {
+            // License is valid and we're not halted -> all good
             log::info!(target: LOG_TARGET, "License validation successful");
+        } else {
+            // License is invalid and we're already halted -> no action needed
+            log::warn!(target: LOG_TARGET, "License still invalid, chain remains halted");
         }
 
         Ok(())
