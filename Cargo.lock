@@ -4001,6 +4001,7 @@ dependencies = [
  "frame-system-benchmarking",
  "frame-system-rpc-runtime-api",
  "frame-try-runtime",
+ "log",
  "pallet-balances",
  "pallet-grandpa",
  "pallet-licensed-aura",

@@ -149,51 +149,7 @@ pub mod pallet {
             }
         }
 
-        fn on_initialize(n: BlockNumberFor<T>) -> Weight {
-            // Check if block production is halted (only after block 10)
-            if HaltProduction::<T>::get() && n > 10u32.into() {
-                // Optional: Auto-recovery after 100 blocks (this can be made configurable)
-                if let Some(halted_at) = HaltedAtBlock::<T>::get() {
-                    let blocks_halted = n.saturating_sub(halted_at);
-                    // Auto-resume after 100 blocks
-                    if blocks_halted > 100u32.into() {
-                        HaltProduction::<T>::put(false);
-                        HaltedAtBlock::<T>::kill();
-                        HaltReason::<T>::kill();
-                        log::info!(
-                            target: LOG_TARGET,
-                            "Auto-resuming block production after {:?} blocks",
-                            blocks_halted
-                        );
-                    } else {
-                        // Panic to invalidate the block
-                        if let Some(reason_bytes) = HaltReason::<T>::get() {
-                            if let Ok(reason_str) = core::str::from_utf8(&reason_bytes) {
-                                panic!(
-                                    "Block production halted at block {:?}. Reason: {}",
-                                    halted_at, reason_str
-                                );
-                            } else {
-                                panic!(
-                                    "Block production halted at block {:?}. Reason: Invalid UTF-8",
-                                    halted_at
-                                );
-                            }
-                        } else {
-                            panic!(
-                                "Block production halted at block {:?}. Reason: No reason provided",
-                                halted_at
-                            );
-                        }
-                    }
-                } else {
-                    // First time halting, record the block number
-                    HaltedAtBlock::<T>::put(n);
-                    panic!("Block production halted at block {:?}", n);
-                }
-            }
-
-            // Original AURA logic continues here...
+        fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
             if let Some(new_slot) = Self::current_slot_from_digests() {
                 let current_slot = CurrentSlot::<T>::get();
 
@@ -241,14 +197,13 @@ pub mod pallet {
     #[pallet::storage]
     pub type CurrentSlot<T: Config> = StorageValue<_, Slot, ValueQuery>;
 
-    /// Flag to halt block production.
-    /// Defaults to false (production enabled).
+    /// Global flag to halt transaction execution.
+    ///
+    /// When this is true, the runtime's BaseCallFilter should be configured
+    /// to reject all extrinsics except `sudo_resume_production` (and optionally
+    /// the OCW halt extrinsic), resulting in "empty blocks".
     #[pallet::storage]
     pub type HaltProduction<T: Config> = StorageValue<_, bool, ValueQuery>;
-
-    /// Block number when halt was triggered (for auto-recovery).
-    #[pallet::storage]
-    pub type HaltedAtBlock<T: Config> = StorageValue<_, BlockNumberFor<T>, OptionQuery>;
 
     /// Optional: Store the reason for halting.
     #[pallet::storage]
@@ -262,13 +217,12 @@ pub mod pallet {
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
-        /// Block production was halted.
-        ProductionHalted { block_number: BlockNumberFor<T> },
-        /// Block production was resumed.
-        ProductionResumed { block_number: BlockNumberFor<T> },
+        /// Block production (i.e. transaction execution) was halted.
+        ProductionHalted,
+        /// Block production resumed.
+        ProductionResumed,
     }
 
-    /// Errors for the pallet.
     #[pallet::error]
     pub enum Error<T> {
         /// Halt reason is too long.
@@ -281,57 +235,49 @@ pub mod pallet {
 
     #[pallet::call]
     impl<T: Config> Pallet<T> {
-        /// Halt block production (requires sudo or governance).
+        /// Halt transaction execution (requires sudo / root).
+        ///
+        /// Blocks will still be authored, but the runtime's BaseCallFilter
+        /// must be configured to disallow all extrinsics except
+        /// `sudo_resume_production` (and optionally the offchain halt extrinsic).
         #[pallet::call_index(0)]
-        #[pallet::weight(T::DbWeight::get().writes(3))]
+        #[pallet::weight(T::DbWeight::get().writes(2))]
         pub fn sudo_halt_production(
             origin: OriginFor<T>,
             reason: Option<Vec<u8>>,
         ) -> DispatchResult {
             ensure_root(origin)?;
-
-            let current_block = frame_system::Pallet::<T>::block_number();
             Self::halt_production_internal(reason)?;
-            Self::deposit_event(Event::ProductionHalted {
-                block_number: current_block,
-            });
+            Self::deposit_event(Event::ProductionHalted);
             Ok(())
         }
 
-        /// Resume block production (requires sudo or governance).
+        /// Resume transaction execution (requires sudo / root).
         #[pallet::call_index(1)]
-        #[pallet::weight(T::DbWeight::get().writes(3))]
+        #[pallet::weight(T::DbWeight::get().writes(2))]
         pub fn sudo_resume_production(origin: OriginFor<T>) -> DispatchResult {
             ensure_root(origin)?;
-
-            let current_block = frame_system::Pallet::<T>::block_number();
             Self::resume_production_internal();
-            Self::deposit_event(Event::ProductionResumed {
-                block_number: current_block,
-            });
+            Self::deposit_event(Event::ProductionResumed);
             Ok(())
         }
 
         /// Halt production from offchain worker (unsigned transaction).
-        /// This is specifically for the offchain worker pallet to call when license check fails.
+        ///
+        /// This is emitted by the OCW when license validation fails.
         #[pallet::call_index(2)]
-        #[pallet::weight(T::DbWeight::get().writes(3))]
+        #[pallet::weight(T::DbWeight::get().writes(2))]
         pub fn offchain_worker_halt_production(
             origin: OriginFor<T>,
             reason: Option<Vec<u8>>,
         ) -> DispatchResult {
-            // This accepts unsigned transactions from the offchain worker
             ensure_none(origin)?;
-
-            let current_block = frame_system::Pallet::<T>::block_number();
             Self::halt_production_internal(reason)?;
-            Self::deposit_event(Event::ProductionHalted {
-                block_number: current_block,
-            });
+            Self::deposit_event(Event::ProductionHalted);
             Ok(())
         }
 
-        /// Set the license key for API validation (requires sudo or governance).
+        /// Set the license key for API validation (requires sudo / root).
         #[pallet::call_index(3)]
         #[pallet::weight(T::DbWeight::get().writes(1))]
         pub fn set_license_key(origin: OriginFor<T>, license_key: Vec<u8>) -> DispatchResult {
@@ -364,7 +310,6 @@ pub mod pallet {
         fn build(&self) {
             Pallet::<T>::initialize_authorities(&self.authorities);
 
-            // Initialize license key if provided
             if let Some(ref key) = self.license_key {
                 let bounded_key = BoundedVec::<u8, ConstU32<128>>::try_from(key.clone())
                     .expect("License key too long for genesis config");
@@ -373,8 +318,7 @@ pub mod pallet {
         }
     }
 
-    /// Allow the chainspec to keep the license key as a readable string while the runtime stores
-    /// it as bytes.
+    /// Allow the chainspec to keep the license key as a readable string.
     mod license_key_serde {
         use super::*;
         use serde::{Deserialize, Deserializer, Serializer};
@@ -407,19 +351,18 @@ pub mod pallet {
             }))
         }
     }
-
     #[pallet::validate_unsigned]
     impl<T: Config> ValidateUnsigned for Pallet<T> {
         type Call = Call<T>;
 
         fn validate_unsigned(_source: TransactionSource, call: &Self::Call) -> TransactionValidity {
             match call {
-                Call::offchain_worker_halt_production { reason: _ } => {
-                    // Only allow one halt transaction per block
+                Call::offchain_worker_halt_production { .. } => {
+                    // Allow at most one halt tx per block.
                     ValidTransaction::with_tag_prefix("AuraHalt")
-                        .priority(u64::MAX) // High priority
+                        .priority(u64::MAX)
                         .and_provides("halt_production")
-                        .longevity(1) // Valid for 1 block
+                        .longevity(1)
                         .propagate(true)
                         .build()
                 }
@@ -430,8 +373,7 @@ pub mod pallet {
 }
 
 impl<T: Config> Pallet<T> {
-    /// Internal function to halt block production.
-    /// Can only be called through sudo or offchain worker extrinsics.
+    /// Internal function to halt transaction execution.
     fn halt_production_internal(reason: Option<Vec<u8>>) -> DispatchResult {
         HaltProduction::<T>::put(true);
 
@@ -441,69 +383,63 @@ impl<T: Config> Pallet<T> {
             HaltReason::<T>::put(bounded_reason);
         }
 
-        log::warn!(target: LOG_TARGET, "Block production halted!");
+        log::warn!(target: LOG_TARGET, "HaltProduction set to true");
         Ok(())
     }
 
-    /// Internal function to resume block production.
-    /// Can only be called through sudo extrinsic.
+    /// Internal function to resume transaction execution.
     fn resume_production_internal() {
         HaltProduction::<T>::put(false);
-        HaltedAtBlock::<T>::kill();
         HaltReason::<T>::kill();
-        log::info!(target: LOG_TARGET, "Block production resumed!");
+        log::info!(target: LOG_TARGET, "HaltProduction set to false");
     }
 
-    /// Check if production is halted (read-only).
+    /// Public helper: is the chain currently halted?
     pub fn is_halted() -> bool {
         HaltProduction::<T>::get()
     }
 
-    /// Check license validity and submit halt transaction if needed.
+    /// Offchain worker: check license and, if invalid, request a halt via unsigned tx.
     fn check_license_and_halt_if_needed() -> Result<(), &'static str> {
         use sp_runtime::offchain::{http, storage::StorageValueRef, Duration};
 
-        let storage = StorageValueRef::persistent(b"licensed_aura::last_check");
+        // 1) Rate-limit checks: once every 30s
+        let storage_last_check = StorageValueRef::persistent(b"licensed_aura::last_check");
         let now = sp_io::offchain::timestamp();
+        let last_check = storage_last_check.get::<u64>().unwrap_or(None).unwrap_or(0);
 
-        let last_check = storage.get::<u64>().unwrap_or(None).unwrap_or(0);
-        // Check every 30 seconds
-        if now.unix_millis() - last_check < 30000 {
+        if now.unix_millis().saturating_sub(last_check) < 30_000 {
             return Ok(());
         }
 
-        // Check if halt was requested by previous check
+        // 2) If a previous check already requested halting, try to submit the unsigned tx.
         let storage_halt = StorageValueRef::persistent(b"licensed_aura::halt_requested");
         if let Some(true) = storage_halt.get::<bool>().unwrap_or(None) {
-            // Halt production if requested by submitting an unsigned transaction
             log::warn!(
                 target: LOG_TARGET,
-                "License validation failed - submitting halt transaction"
+                "License invalid previously: submitting halt tx from OCW"
             );
 
-            // Submit unsigned transaction to halt production
             let call: Call<T> = Call::offchain_worker_halt_production {
                 reason: Some(b"License validation failed".to_vec()),
             };
 
-            // Submit the transaction to the transaction pool
             use frame_system::offchain::SubmitTransaction;
             if let Err(e) =
                 SubmitTransaction::<T, Call<T>>::submit_unsigned_transaction(call.into())
             {
                 log::error!(
                     target: LOG_TARGET,
-                    "Failed to submit halt transaction: {:?}",
+                    "Failed to submit halt unsigned tx: {:?}",
                     e
                 );
             } else {
-                log::info!(target: LOG_TARGET, "Halt transaction submitted to pool");
-                // Clear the halt request flag after successful submission
+                log::info!(target: LOG_TARGET, "Halt unsigned tx submitted");
                 storage_halt.set(&false);
             }
         }
 
-        // Get the license key from storage
+        // 3) Read license key from on-chain storage
         let license_key_bytes = LicenseKey::<T>::get().ok_or("License key not set")?;
         let license_key =
             alloc::str::from_utf8(&license_key_bytes).map_err(|_| "Invalid license key UTF8")?;
@@ -513,110 +449,54 @@ impl<T: Config> Pallet<T> {
         let deadline = now.add(Duration::from_millis(5_000));
         let request = http::Request::get(&api_url);
 
-        // Attempt to send the request
-        let pending = match request.deadline(deadline).send() {
-            Ok(p) => p,
-            Err(_) => {
-                log::error!(
-                    target: LOG_TARGET,
-                    "Failed to send license check request - halting production"
-                );
-                let storage_halt = StorageValueRef::persistent(b"licensed_aura::halt_requested");
-                storage_halt.set(&true);
-                return Ok(());
-            }
-        };
+        let pending = request
+            .deadline(deadline)
+            .send()
+            .map_err(|_| "send failed")?;
 
-        // Wait for response
-        let response = match pending.try_wait(deadline) {
-            Ok(Ok(resp)) => resp,
-            Ok(Err(_)) => {
-                log::error!(
-                    target: LOG_TARGET,
-                    "License check request failed - halting production"
-                );
-                let storage_halt = StorageValueRef::persistent(b"licensed_aura::halt_requested");
-                storage_halt.set(&true);
-                return Ok(());
-            }
-            Err(_) => {
-                log::error!(
-                    target: LOG_TARGET,
-                    "License check request deadline reached - halting production"
-                );
-                let storage_halt = StorageValueRef::persistent(b"licensed_aura::halt_requested");
-                storage_halt.set(&true);
-                return Ok(());
-            }
-        };
+        let response = pending
+            .try_wait(deadline)
+            .map_err(|_| "wait failed")?
+            .map_err(|_| "http error")?;
 
-        // Update last check timestamp only after successful response
-        storage.set(&now.unix_millis());
+        // Only update last_check after we've heard back.
+        storage_last_check.set(&now.unix_millis());
 
-        // Check if response is not 200 OR if body doesn't contain valid: true
         let is_valid = if response.code == 200 {
             let body = response.body().collect::<Vec<u8>>();
             match alloc::str::from_utf8(&body) {
                 Ok(body_str) => Self::parse_license_response(body_str),
                 Err(_) => {
-                    log::error!(
-                        target: LOG_TARGET,
-                        "Invalid UTF8 in license response - halting production"
-                    );
+                    log::error!(target: LOG_TARGET, "Invalid UTF8 in license response");
                     false
                 }
             }
         } else {
             log::error!(
                 target: LOG_TARGET,
-                "License check failed with HTTP status: {} - halting production",
+                "License check failed with HTTP {:?}",
                 response.code
             );
             false
         };
 
-        // If license is invalid, set halt flag directly
         if !is_valid {
             log::error!(
                 target: LOG_TARGET,
-                "License validation failed! Halting block production."
+                "License validation failed; will request halt via unsigned tx"
             );
-            // Directly set the on-chain storage
-            // This write happens during offchain worker execution (after block finalization)
-            // It will be visible in the next block's on_initialize
-            HaltProduction::<T>::put(true);
-            let current_block = frame_system::Pallet::<T>::block_number();
-            HaltedAtBlock::<T>::put(current_block);
-            let reason = b"License validation failed".to_vec();
-            if let Ok(bounded_reason) = BoundedVec::<u8, ConstU32<256>>::try_from(reason) {
-                HaltReason::<T>::put(bounded_reason);
-            }
+            storage_halt.set(&true);
         } else {
-            log::info!(
-                target: LOG_TARGET,
-                "License validation successful."
-            );
-
-            // Resume production if it was previously halted
-            if HaltProduction::<T>::get() {
-                Self::resume_production_internal();
-                log::info!(
-                    target: LOG_TARGET,
-                    "License valid - resuming block production"
-                );
-            }
+            log::info!(target: LOG_TARGET, "License validation successful");
         }
 
         Ok(())
     }
 
-    /// Parse the license API response to check if valid: true
+    /// Parse a JSON body that contains `"valid": true` or `"valid": false`.
     fn parse_license_response(response_str: &str) -> bool {
-        // Simple JSON parsing to find "valid":true or "valid": true
-        // This is a basic implementation - in production, consider using a proper JSON parser
         if let Some(start) = response_str.find("\"valid\"") {
             let after_valid = &response_str[start + 7..];
-            // Skip whitespace and colon
             let trimmed = after_valid.trim_start();
             if let Some(colon_trimmed) = trimmed.strip_prefix(':') {
                 let value_part = colon_trimmed.trim_start();

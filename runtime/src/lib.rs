@@ -155,6 +155,59 @@ parameter_types! {
     pub const SS58Prefix: u8 = 42;
 }
 
+// Filter that enforces "empty blocks while halted".
+use frame_support::traits::Contains;
+use log::{error, warn};
+
+pub struct AuraHaltFilter;
+
+impl Contains<RuntimeCall> for AuraHaltFilter {
+    fn contains(call: &RuntimeCall) -> bool {
+        // Always allow mandatory inherents (like timestamp).
+        // This keeps block production working even while halted.
+        if matches!(
+            call,
+            RuntimeCall::Timestamp(pallet_timestamp::Call::set { .. })
+        ) {
+            return true;
+        }
+
+        // Everything else is governed by the halt flag.
+        let halted = pallet_licensed_aura::Pallet::<Runtime>::is_halted();
+
+        if halted {
+            const LOG_TARGET: &str = "licensed-aura";
+
+            warn!(
+                target: LOG_TARGET,
+                "❗️ Licensed Aura is halted. Please renew your license."
+            );
+            error!(
+                "❌️ Licensed Aura is halted. Extrinsic {:?} cannot be processed.",
+                call
+            );
+
+            match call {
+                // Allow sudo to resume while halted.
+                RuntimeCall::Aura(pallet_licensed_aura::Call::sudo_resume_production {
+                    ..
+                }) => true,
+
+                // Allow OCW halt extrinsic while halted (idempotent/logging).
+                RuntimeCall::Aura(
+                    pallet_licensed_aura::Call::offchain_worker_halt_production { .. },
+                ) => true,
+
+                // Block everything else while HaltProduction == true.
+                _ => false,
+            }
+        } else {
+            // Normal mode: allow all calls.
+            true
+        }
+    }
+}
+
 /// The default types are being injected by [`derive_impl`](`frame_support::derive_impl`) from
 /// [`SoloChainDefaultConfig`](`struct@frame_system::config_preludes::SolochainDefaultConfig`),
 /// but overridden as needed.
@@ -183,6 +236,7 @@ impl frame_system::Config for Runtime {
     /// This is used as an identifier of the chain. 42 is the generic substrate prefix.
     type SS58Prefix = SS58Prefix;
     type MaxConsumers = frame_support::traits::ConstU32<16>;
+    type BaseCallFilter = AuraHaltFilter;
 }
 
 impl pallet_licensed_aura::Config for Runtime {
