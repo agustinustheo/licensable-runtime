@@ -368,24 +368,23 @@ pub mod pallet {
     impl<T: Config> ValidateUnsigned for Pallet<T> {
         type Call = Call<T>;
 
-        fn validate_unsigned(_source: TransactionSource, call: &Self::Call) -> TransactionValidity {
+        fn validate_unsigned(source: TransactionSource, call: &Self::Call) -> TransactionValidity {
             match call {
-                Call::offchain_worker_halt_production { .. } => {
-                    // Allow at most one halt tx per block.
-                    ValidTransaction::with_tag_prefix("AuraHalt")
+                Call::offchain_worker_halt_production { .. }
+                | Call::offchain_worker_resume_production { .. } => {
+                    // Only allow extrinsics created locally by the offchain worker.
+                    // This prevents malicious actors from submitting these extrinsics remotely.
+                    match source {
+                        TransactionSource::Local => {}
+                        _ => return InvalidTransaction::BadSigner.into(),
+                    }
+
+                    // Use the call itself as the unique identifier to prevent duplicates.
+                    ValidTransaction::with_tag_prefix("AuraOCW")
                         .priority(u64::MAX)
-                        .and_provides("halt_production")
+                        .and_provides(call)
                         .longevity(1)
-                        .propagate(true)
-                        .build()
-                }
-                Call::offchain_worker_resume_production { .. } => {
-                    // Allow at most one resume tx per block.
-                    ValidTransaction::with_tag_prefix("AuraResume")
-                        .priority(u64::MAX)
-                        .and_provides("resume_production")
-                        .longevity(1)
-                        .propagate(true)
+                        .propagate(false)
                         .build()
                 }
                 _ => InvalidTransaction::Call.into(),

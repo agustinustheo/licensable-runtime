@@ -38,7 +38,7 @@ pub struct AuraHaltFilter<RuntimeCall, T>(core::marker::PhantomData<(RuntimeCall
 impl<RuntimeCall, T> AuraHaltFilter<RuntimeCall, T>
 where
     T: Config,
-    RuntimeCall: IsLicensedAuraCall + IsTimestampCall + IsSudoCall<RuntimeCall>,
+    RuntimeCall: IsLicensedAuraCall + IsDefaultInherentExstrinsicCall + IsSudoCall<RuntimeCall>,
 {
     /// Helper: what is allowed *while halted*?
     fn allowed_while_halted(call: &RuntimeCall) -> bool {
@@ -60,7 +60,10 @@ where
 impl<RuntimeCall, T> Contains<RuntimeCall> for AuraHaltFilter<RuntimeCall, T>
 where
     T: Config,
-    RuntimeCall: IsLicensedAuraCall + IsTimestampCall + IsSudoCall<RuntimeCall> + core::fmt::Debug,
+    RuntimeCall: IsLicensedAuraCall
+        + IsDefaultInherentExstrinsicCall
+        + IsSudoCall<RuntimeCall>
+        + core::fmt::Debug,
 {
     fn contains(call: &RuntimeCall) -> bool {
         // Always allow mandatory inherents (like timestamp).
@@ -106,7 +109,7 @@ pub trait IsLicensedAuraCall {
 }
 
 /// Trait to check if a RuntimeCall is a timestamp::set call
-pub trait IsTimestampCall {
+pub trait IsDefaultInherentExstrinsicCall {
     /// Check if this is a timestamp::set call
     fn is_timestamp_set(&self) -> bool;
 }

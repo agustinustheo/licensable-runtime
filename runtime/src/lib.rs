@@ -157,7 +157,7 @@ parameter_types! {
 
 // Import the filter from the licensed aura pallet
 use pallet_licensed_aura::filter::{
-    AuraHaltFilter, IsLicensedAuraCall, IsSudoCall, IsTimestampCall,
+    AuraHaltFilter, IsDefaultInherentExstrinsicCall, IsLicensedAuraCall, IsSudoCall,
 };
 
 // Implement the traits required by the AuraHaltFilter for our RuntimeCall
@@ -187,7 +187,7 @@ impl IsLicensedAuraCall for RuntimeCall {
     }
 }
 
-impl IsTimestampCall for RuntimeCall {
+impl IsDefaultInherentExstrinsicCall for RuntimeCall {
     // You can add more calls to the timestamp pallet here if needed.
     fn is_timestamp_set(&self) -> bool {
         matches!(

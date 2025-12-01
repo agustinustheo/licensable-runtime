@@ -8,7 +8,8 @@ The Licensed Aura pallet provides:
 - **License Validation**: Offchain workers validate licenses against an external API every 30 seconds
 - **Transaction Control**: Halt/resume transaction execution while keeping blocks producing (empty blocks when halted)
 - **Flexible Management**: Both automated (via offchain worker) and manual (via sudo) control
-- **Recovery Mechanism**: Manual resume capability through sudo calls
+- **Auto-Recovery**: Automated resume when license becomes valid again (via offchain worker)
+- **Manual Recovery**: Manual resume capability through sudo calls when needed
 
 ## Quick Reference Card
 
@@ -30,17 +31,60 @@ The Licensed Aura pallet provides:
 │    • sudo_resume_production()                           │
 │    • set_license_key(key)                               │
 │    • offchain_worker_halt_production(reason) [unsigned] │
+│    • offchain_worker_resume_production() [unsigned]     │
 │                                                         │
 │  Configuration:                                         │
-│    • Rate Limit: 30 seconds (line 411)                  │
+│    • Rate Limit: 30 seconds (line 433)                  │
 │    • API: http://localhost:3000/license                 │
-│    • HTTP Timeout: 5 seconds (line 449)                 │
+│    • HTTP Timeout: 5 seconds (line 500)                 │
 │                                                         │
 │  Resume:                                                │
 │    sudo.sudo(aura.sudoResumeProduction())               │
 │                                                         │
 └─────────────────────────────────────────────────────────┘
 ```
+
+## ⚠️ Development Status & Known Vulnerabilities
+
+**IMPORTANT**: This pallet is currently in **DEVELOPMENT** and the current version is a **PROOF OF CONCEPT (POC)** only. **DO NOT use in production environments.**
+
+### High-Severity Vulnerabilities
+
+| Issue | Description | Impact |
+|-------|-------------|--------|
+| **HTTP Spoofing / MITM** | OCW uses unencrypted HTTP to `localhost:3000` without TLS or signature verification | Attacker on same machine/network can manipulate license validation responses |
+| **Unsafe JSON Parsing** | License response parsing uses string matching (`find("valid")`) instead of proper JSON parser | Trivially spoofable: `"valid": truee`, `"notvalid": true` all pass validation |
+| **Network Loss → Chain Halt** | Any HTTP error (network down, timeout) triggers permanent chain halt | No automatic recovery from transient network issues; requires manual sudo intervention |
+| **Race Conditions** | Halt/resume signals use per-node offchain storage, not consensus | Non-deterministic behavior across validators can cause chain forks |
+
+### Medium-Severity Issues
+
+| Issue | Description |
+|-------|-------------|
+| **Weak Transaction Deduplication** | `and_provides(call)` uses full call encoding, not stable keys | Multiple similar halt/resume transactions can enter same block |
+| **Non-Validator OCW Submission** | `TransactionSource::Local` allows any full node to submit unsigned extrinsics | Not restricted to validator set; any RPC node can trigger halt/resume |
+| **Assert Panics** | Runtime uses `assert!` for slot validation | Malformed digests or timestamp issues can brick block production |
+
+### Low-Severity Issues
+
+- **Hardcoded Endpoint**: `localhost:3000` not suitable for production deployments
+- **No Replay Protection**: OCW storage loss can cause duplicate submissions
+- **BaseCallFilter Coordination**: Must ensure Grandpa finality and governance remain functional when halted
+
+### Mitigation Roadmap
+
+To move from POC to production-ready:
+
+1. ✅ Restrict unsigned extrinsics to `TransactionSource::Local` (completed)
+2. ⚠️ Implement HTTPS + certificate verification or signed API responses
+3. ⚠️ Use proper JSON parser (e.g., `serde_json`)
+4. ⚠️ Distinguish network errors from explicit license denial
+5. ⚠️ Move halt/resume signaling to consensus layer
+6. ⚠️ Add validator-only OCW authorization via `AuthorityId` signatures
+7. ⚠️ Replace `assert!` with graceful error handling
+8. ⚠️ Make API endpoint configurable via runtime configuration
+
+**For production use, a complete security audit and architectural redesign is required.**
 
 ## How It Works
 
@@ -90,7 +134,12 @@ sequenceDiagram
     OCW->>API: GET /license?key=xxx
     API-->>OCW: {"valid": false}
 
-    OCW->>Storage: Set HaltProduction = true
+    OCW->>OCW: Set offchain storage<br/>halt_requested = true
+
+    Note over OCW: Next offchain worker cycle
+
+    OCW->>Storage: Submit unsigned tx<br/>offchain_worker_halt_production
+    Storage->>Storage: Set HaltProduction = true
 
     Note over Block: Next block production
 
@@ -109,9 +158,15 @@ sequenceDiagram
 
     Note over Block: Block contains only timestamp
 
-    Note over OCW: Admin fixes license
-
-    loop Manual Resume
+    alt Automatic Resume (License becomes valid)
+        Note over OCW: License renewed
+        OCW->>API: GET /license?key=xxx
+        API-->>OCW: {"valid": true}
+        OCW->>OCW: Set offchain storage<br/>resume_requested = true
+        Note over OCW: Next offchain worker cycle
+        OCW->>Storage: Submit unsigned tx<br/>offchain_worker_resume_production
+        Storage->>Storage: Set HaltProduction = false
+    else Manual Resume (Admin intervention)
         Admin->>Filter: sudo.sudo(Aura.sudo_resume_production)
         Filter->>Storage: Is halted?
         Storage-->>Filter: true
@@ -142,54 +197,79 @@ sequenceDiagram
 | `sudo_halt_production(reason)` | Root/Sudo | Manually halt transaction execution |
 | `sudo_resume_production()` | Root/Sudo | Manually resume transaction execution |
 | `offchain_worker_halt_production(reason)` | None (Unsigned) | Automated halt from offchain worker |
+| `offchain_worker_resume_production()` | None (Unsigned) | Automated resume from offchain worker |
 | `set_license_key(license_key)` | Root/Sudo | Set/update the license key |
 
 ### 3. Runtime Call Filter (runtime/src/lib.rs)
 
-The `AuraHaltFilter` implements `Contains<RuntimeCall>` to filter transactions:
+The `AuraHaltFilter` is now implemented using a trait-based architecture in the pallet (`pallets/licensed-aura/src/filter.rs`), with the runtime implementing the required traits:
 
 ```rust
-pub struct AuraHaltFilter;
+// Import the filter and traits from the licensed aura pallet
+use pallet_licensed_aura::filter::{
+    AuraHaltFilter, IsLicensedAuraCall, IsSudoCall, IsDefaultInherentExstrinsicCall,
+};
 
-impl Contains<RuntimeCall> for AuraHaltFilter {
-    fn contains(call: &RuntimeCall) -> bool {
-        // Always allow timestamp (mandatory inherent)
-        if matches!(call, RuntimeCall::Timestamp(_)) {
-            return true;
-        }
+// Implement the traits for RuntimeCall
+impl IsLicensedAuraCall for RuntimeCall {
+    fn is_sudo_resume_production(&self) -> bool {
+        matches!(
+            self,
+            RuntimeCall::Aura(pallet_licensed_aura::Call::sudo_resume_production { .. })
+        )
+    }
 
-        let halted = pallet_licensed_aura::Pallet::<Runtime>::is_halted();
+    fn is_offchain_worker_halt(&self) -> bool {
+        matches!(
+            self,
+            RuntimeCall::Aura(pallet_licensed_aura::Call::offchain_worker_halt_production { .. })
+        )
+    }
 
-        if halted {
-            // Only allow resume calls while halted
-            match call {
-                // IMPORTANT: Must handle nested Sudo calls!
-                RuntimeCall::Sudo(pallet_sudo::Call::sudo { call })
-                | RuntimeCall::Sudo(pallet_sudo::Call::sudo_unchecked_weight { call, .. }) => {
-                    // Check the inner call
-                    matches!(
-                        **call,
-                        RuntimeCall::Aura(
-                            pallet_licensed_aura::Call::sudo_resume_production { .. }
-                        )
-                    )
-                }
-                RuntimeCall::Aura(
-                    pallet_licensed_aura::Call::offchain_worker_halt_production { .. }
-                ) => true,
-                _ => false,
+    fn is_offchain_worker_resume(&self) -> bool {
+        matches!(
+            self,
+            RuntimeCall::Aura(pallet_licensed_aura::Call::offchain_worker_resume_production { .. })
+        )
+    }
+}
+
+impl IsDefaultInherentExstrinsicCall for RuntimeCall {
+    fn is_timestamp_set(&self) -> bool {
+        matches!(
+            self,
+            RuntimeCall::Timestamp(pallet_timestamp::Call::set { .. })
+        )
+    }
+}
+
+impl IsSudoCall<RuntimeCall> for RuntimeCall {
+    fn is_sudo_wrapping_allowed(&self) -> bool {
+        match self {
+            RuntimeCall::Sudo(pallet_sudo::Call::sudo { call })
+            | RuntimeCall::Sudo(pallet_sudo::Call::sudo_unchecked_weight { call, .. }) => {
+                // Check if the inner call is allowed (resume or halt)
+                call.is_sudo_resume_production()
+                    || call.is_offchain_worker_halt()
+                    || call.is_offchain_worker_resume()
             }
-        } else {
-            true // Normal mode: allow all
+            _ => false,
         }
     }
+}
+
+// Configure the filter in frame_system
+impl frame_system::Config for Runtime {
+    // ... other config
+    type BaseCallFilter = AuraHaltFilter<RuntimeCall, Runtime>;
 }
 ```
 
 **Key Points**:
-- **Nested Call Handling**: The filter must check inside `sudo()` calls to detect `sudo_resume_production`
+- **Trait-Based Architecture**: The filter logic is now modular and reusable via traits
+- **Nested Call Handling**: The `IsSudoCall` trait handles nested `sudo()` calls automatically
 - **Mandatory Inherents**: Always allow `Timestamp::set` to keep blocks producing
-- **Recursive Pattern**: Uses pattern matching on the inner call to allow `sudo(Aura::sudo_resume_production())`
+- **Auto-Resume Support**: The filter now allows both halt and resume operations from the offchain worker
 
 ### 4. Offchain Worker License Validation
 
@@ -197,7 +277,16 @@ impl Contains<RuntimeCall> for AuraHaltFilter {
 flowchart TD
     Start([Offchain Worker Triggered]) --> RateLimit{Rate limit<br/>30s passed?}
     RateLimit -->|No| End([Exit])
-    RateLimit -->|Yes| ReadKey[Read LicenseKey<br/>from storage]
+    RateLimit -->|Yes| CheckPending{Pending action<br/>from previous check?}
+
+    CheckPending -->|halt_requested| SubmitHalt[Submit unsigned tx<br/>offchain_worker_halt_production]
+    CheckPending -->|resume_requested| SubmitResume[Submit unsigned tx<br/>offchain_worker_resume_production]
+    CheckPending -->|No pending| ReadKey[Read LicenseKey<br/>from storage]
+
+    SubmitHalt --> ClearHaltFlag[Clear halt_requested flag]
+    SubmitResume --> ClearResumeFlag[Clear resume_requested flag]
+    ClearHaltFlag --> End
+    ClearResumeFlag --> End
 
     ReadKey --> CallAPI[HTTP GET<br/>localhost:3000/license?key=xxx]
     CallAPI --> Parse{Parse JSON<br/>response}
@@ -206,23 +295,22 @@ flowchart TD
     Parse -->|valid: false| Invalid[License Invalid]
     Parse -->|HTTP error| Invalid
 
-    Invalid --> SetFlag[Set offchain storage<br/>halt_requested = true]
-    SetFlag --> NextCycle[Wait for next cycle]
-
-    NextCycle --> SubmitTx[Submit unsigned tx<br/>offchain_worker_halt_production]
-    SubmitTx --> UpdateStorage[Update HaltProduction<br/>in on-chain storage]
+    Invalid --> CheckCurrentlyHalted{Currently<br/>halted?}
+    CheckCurrentlyHalted -->|No| SetHaltFlag[Set offchain storage<br/>halt_requested = true]
+    CheckCurrentlyHalted -->|Yes| End
 
     Valid --> CheckHalted{Currently<br/>halted?}
-    CheckHalted -->|Yes| ClearOffchain[Clear offchain<br/>halt_requested flag]
+    CheckHalted -->|Yes| SetResumeFlag[Set offchain storage<br/>resume_requested = true]
     CheckHalted -->|No| End
 
-    ClearOffchain --> End
-    UpdateStorage --> End
+    SetHaltFlag --> End
+    SetResumeFlag --> End
 
     style Start fill:#e8f5e9,stroke:#4caf50
     style Invalid fill:#ffebee,stroke:#f44336
     style Valid fill:#e3f2fd,stroke:#2196f3
-    style UpdateStorage fill:#fff3e0,stroke:#ff9800
+    style SubmitHalt fill:#fff3e0,stroke:#ff9800
+    style SubmitResume fill:#c8e6c9,stroke:#4caf50
 ```
 
 ### Events & Errors
@@ -283,45 +371,21 @@ impl pallet_licensed_aura::Config for Runtime {
 **CRITICAL**: Configure `BaseCallFilter` in `frame_system::Config`:
 
 ```rust
-use frame_support::traits::Contains;
+// Import the filter and traits from the licensed aura pallet
+use pallet_licensed_aura::filter::{
+    AuraHaltFilter, IsLicensedAuraCall, IsSudoCall, IsDefaultInherentExstrinsicCall,
+};
 
-pub struct AuraHaltFilter;
+// Implement the required traits for RuntimeCall (see section 3 above for details)
+impl IsLicensedAuraCall for RuntimeCall { /* ... */ }
+impl IsDefaultInherentExstrinsicCall for RuntimeCall { /* ... */ }
+impl IsSudoCall<RuntimeCall> for RuntimeCall { /* ... */ }
 
-impl Contains<RuntimeCall> for AuraHaltFilter {
-    fn contains(call: &RuntimeCall) -> bool {
-        // Always allow timestamp inherents
-        if matches!(call, RuntimeCall::Timestamp(pallet_timestamp::Call::set { .. })) {
-            return true;
-        }
-
-        let halted = pallet_licensed_aura::Pallet::<Runtime>::is_halted();
-
-        if halted {
-            match call {
-                // Handle nested sudo calls for resume
-                RuntimeCall::Sudo(pallet_sudo::Call::sudo { call })
-                | RuntimeCall::Sudo(pallet_sudo::Call::sudo_unchecked_weight { call, .. }) => {
-                    matches!(
-                        **call,
-                        RuntimeCall::Aura(pallet_licensed_aura::Call::sudo_resume_production { .. })
-                    )
-                }
-                // Allow OCW halt transactions
-                RuntimeCall::Aura(
-                    pallet_licensed_aura::Call::offchain_worker_halt_production { .. }
-                ) => true,
-                _ => false,
-            }
-        } else {
-            true
-        }
-    }
-}
-
+// Configure frame_system to use the filter
 #[derive_impl(frame_system::config_preludes::SolochainDefaultConfig)]
 impl frame_system::Config for Runtime {
     // ... other config
-    type BaseCallFilter = AuraHaltFilter; // <-- REQUIRED
+    type BaseCallFilter = AuraHaltFilter<RuntimeCall, Runtime>; // <-- REQUIRED
 }
 ```
 
@@ -386,18 +450,21 @@ Default: `http://localhost:3000/license?key={license_key}`
 **Benefits**:
 - ✅ Chain stays alive and recoverable
 - ✅ Consensus continues working
-- ✅ Can be resumed via sudo without chain restart
+- ✅ Can be resumed automatically when license is renewed
+- ✅ Can be resumed manually via sudo without chain restart
 - ✅ No risk of permanent chain halt
 
 ### Why Separate Pallet + Runtime Filter?
 
-**Pallet (`licensed-aura`)**: Manages the `HaltProduction` state
+**Pallet (`licensed-aura`)**: Manages the `HaltProduction` state and provides filter traits
 **Runtime Filter (`AuraHaltFilter`)**: Enforces the halt by filtering calls
 
-This separation allows:
+This trait-based separation allows:
 - Clean responsibility separation
-- Pallet doesn't need to know about all possible calls
+- Pallet doesn't need to know about all possible runtime calls
 - Easy to customize which calls are allowed while halted
+- Modular and reusable filter architecture
+- Runtime implements simple traits to define allowed calls
 
 ### Why Offchain Worker Instead of On-Chain?
 
@@ -409,7 +476,8 @@ This separation allows:
 **Offchain worker** provides:
 - Free HTTP requests (no gas)
 - Regular polling (every 30s)
-- Can submit unsigned transactions to update state
+- Can submit unsigned transactions to update state (both halt and resume)
+- Automated recovery when license becomes valid again
 
 ### Why Nested Sudo Call Handling?
 
@@ -424,16 +492,23 @@ RuntimeCall::Sudo(
 )
 ```
 
-The filter must unwrap the `sudo` wrapper to check the inner `Aura::sudo_resume_production` call.
+The filter must unwrap the `sudo` wrapper to check the inner `Aura::sudo_resume_production` call. This is handled via the `IsSudoCall` trait which the runtime implements. The trait's `is_sudo_wrapping_allowed()` method automatically unwraps nested sudo calls and checks if the inner call is allowed (resume or halt operations).
 
 ## Security Considerations
 
 ### Unsigned Transaction Validation
 
-The pallet implements `ValidateUnsigned` for `offchain_worker_halt_production`:
+The pallet implements `ValidateUnsigned` for both `offchain_worker_halt_production` and `offchain_worker_resume_production`:
+
+**For `offchain_worker_halt_production`**:
 - **Priority**: `u64::MAX` (highest priority)
 - **Longevity**: 1 block (prevents replay attacks)
 - **Provides**: `"halt_production"` tag (only one halt tx per block)
+
+**For `offchain_worker_resume_production`**:
+- **Priority**: `u64::MAX` (highest priority)
+- **Longevity**: 1 block (prevents replay attacks)
+- **Provides**: `"resume_production"` tag (only one resume tx per block)
 
 ### Access Control
 
@@ -443,13 +518,15 @@ The pallet implements `ValidateUnsigned` for `offchain_worker_halt_production`:
 | `sudo_resume_production` | Root | Admin only |
 | `set_license_key` | Root | Admin only |
 | `offchain_worker_halt_production` | None (Unsigned) | Validated via `ValidateUnsigned` |
+| `offchain_worker_resume_production` | None (Unsigned) | Validated via `ValidateUnsigned` |
 
 ### Attack Vectors & Mitigations
 
 1. **DOS via Spam Halt Transactions**: Mitigated by `provides("halt_production")` - only one per block
-2. **Replay Attacks**: Mitigated by `longevity(1)` - only valid for 1 block
-3. **Unauthorized Resume**: Only root can call `sudo_resume_production`
-4. **License API Manipulation**: API should be secured separately (not in scope)
+2. **DOS via Spam Resume Transactions**: Mitigated by `provides("resume_production")` - only one per block
+3. **Replay Attacks**: Mitigated by `longevity(1)` - only valid for 1 block
+4. **Unauthorized Resume**: Only root or offchain worker (when license is valid) can resume
+5. **License API Manipulation**: API should be secured separately (not in scope)
 
 ## Testing & Verification
 
@@ -480,6 +557,7 @@ docker logs -f licensable-substrate | grep "License validation"
 # - "License validation successful" (every 30s when valid)
 # - "License validation failed" (when invalid)
 # - "Halt unsigned tx submitted" (when halting)
+# - "Resume unsigned tx submitted" (when auto-resuming)
 ```
 
 **Step 3: Test Halt Scenario**
@@ -491,10 +569,21 @@ docker logs -f licensable-substrate | grep "License validation"
 ```
 
 **Step 4: Test Resume**
+
+**Option A: Automatic Resume** (recommended)
 ```bash
-# Fix license in API or manually resume:
+# 1. Fix license in the API to return {"valid": true}
+# 2. Wait up to 30 seconds for offchain worker to detect valid license
+# 3. Observe "Resume unsigned tx submitted" in logs
+# 4. Verify: Transactions are now accepted automatically
+```
+
+**Option B: Manual Resume**
+```bash
+# If license is still invalid but you need to resume anyway:
 # Via Polkadot.js: sudo.sudo(aura.sudoResumeProduction())
 # Verify: Transactions are now accepted
+# Note: Chain will halt again in 30s if license is still invalid
 ```
 
 ### 3. Monitoring
@@ -527,7 +616,7 @@ Check logs in each block:
 | **Control Mechanism** | None | `HaltProduction` flag + Runtime filter |
 | **External Dependencies** | None | License API (HTTP) |
 | **Recovery** | N/A | Manual via sudo or automatic on valid license |
-| **Unsigned Transactions** | Not used | Used for automated halting |
+| **Unsigned Transactions** | Not used | Used for automated halting and resuming |
 
 ## Configuration Reference
 
@@ -535,25 +624,25 @@ Check logs in each block:
 
 | Constant | Location | Value | Purpose |
 |----------|----------|-------|---------|
-| Rate limit | Line 411 | 30,000 ms | Minimum time between license checks |
-| API endpoint | Line 447 | `localhost:3000` | License validation API |
-| HTTP timeout | Line 449 | 5,000 ms | Maximum time to wait for API response |
-| Max reason length | Line 381 | 256 bytes | Maximum halt reason size |
-| Max license key length | Line 286 | 128 bytes | Maximum license key size |
+| Rate limit | Line 433 | 30,000 ms | Minimum time between license checks |
+| API endpoint | Line 498 | `localhost:3000` | License validation API |
+| HTTP timeout | Line 500 | 5,000 ms | Maximum time to wait for API response |
+| Max reason length | Line 403 | 256 bytes | Maximum halt reason size |
+| Max license key length | Line 287 | 128 bytes | Maximum license key size |
 
 ### Customization Points
 
 To customize these values, modify `pallets/licensed-aura/src/lib.rs`:
 
 ```rust
-// Rate limit (line 411)
+// Rate limit (line 433)
 if now.unix_millis().saturating_sub(last_check) < 30_000 { // Change 30_000
 
-// API endpoint (line 447)
+// API endpoint (line 498)
 let api_url = alloc::format!("http://localhost:3000/license?key={}", license_key);
 // Change to: http://your-api-server.com/validate
 
-// HTTP timeout (line 449)
+// HTTP timeout (line 500)
 let deadline = now.add(Duration::from_millis(5_000)); // Change 5_000
 ```
 
@@ -592,8 +681,9 @@ The Licensed Aura pallet provides license-based transaction control for Substrat
 
 1. **Offchain Worker**: Validates licenses every 30 seconds against external API
 2. **HaltProduction Flag**: Controls transaction execution state
-3. **Runtime Filter (AuraHaltFilter)**: Enforces the halt by filtering calls
-4. **Recovery Mechanism**: Manual resume via sudo when license is valid
+3. **Runtime Filter (AuraHaltFilter)**: Enforces the halt by filtering calls using a trait-based architecture
+4. **Auto-Recovery Mechanism**: Automatic resume via offchain worker when license becomes valid
+5. **Manual Override**: Manual resume via sudo for emergency situations
 
 **Key Insight**: Blocks continue producing (preventing chain halt), but transactions are filtered out when `HaltProduction` is `true`, resulting in empty blocks containing only mandatory inherents.
 
