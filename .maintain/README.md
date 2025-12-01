@@ -22,19 +22,20 @@ This directory contains all Docker-related files and maintenance documentation f
 
 The project uses a **microservices architecture** with three separate containers:
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                   Docker Network                        │
-│                                                         │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐ │
-│  │  PostgreSQL  │  │  NestJS API  │  │   Substrate  │ │
-│  │   Database   │  │   Service    │  │     Node     │ │
-│  │              │  │              │  │              │ │
-│  │  Port: 5432  │◄─┤  Port: 3000  │  │  Port: 9933  │ │
-│  │              │  │              │  │  Port: 9944  │ │
-│  └──────────────┘  └──────────────┘  └──────────────┘ │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph Docker Network ["Docker Network"]
+        postgres[PostgreSQL Database<br/>Port: 5432]
+        api[NestJS API Service<br/>Port: 3000]
+        substrate[Substrate Node<br/>Ports: 9933, 9944]
+
+        api --> postgres
+        substrate -.-> api
+    end
+
+    style postgres fill:#e1f5e1,stroke:#4caf50,stroke-width:2px
+    style api fill:#e3f2fd,stroke:#2196f3,stroke-width:2px
+    style substrate fill:#fff9c4,stroke:#fbc02d,stroke-width:2px
 ```
 
 ### Containers
